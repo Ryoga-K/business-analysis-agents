@@ -1,130 +1,359 @@
-"""Pydantic models shared across agents, RDF conversion, and validation."""
+"""エージェント入出力、検証、修正ループで共有するPydanticモデル。"""
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class StrictBaseModel(BaseModel):
+    """研究用プロトタイプで共通利用する厳格なPydantic基底モデル。"""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class RdfKind(str, Enum):
-    """Supported RDF graph categories."""
+    """生成・検証対象となるRDF種別。"""
 
     WORKFLOW = "workflow"
     DATA = "data"
     RULE = "rule"
 
 
-class SourceDocument(BaseModel):
-    """Business document content supplied to extraction agents."""
+class AgentName(str, Enum):
+    """再実行や修正対象として識別するエージェント名。"""
 
-    document_id: str
-    title: str
-    text: str
+    SCENARIO = "scenario"
+    WORKFLOW = "workflow"
+    DATA = "data"
+    RULE = "rule"
+    CONSISTENCY = "consistency"
+    HUMAN_REVIEW = "human_review"
 
 
-class ScenarioAgentInput(BaseModel):
-    """Input for the scenario creation agent."""
+class Severity(str, Enum):
+    """レビュー結果や検証違反の重大度。"""
+
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
+class ReviewStatus(str, Enum):
+    """人間または自己レビューの判定状態。"""
+
+    APPROVED = "approved"
+    NEEDS_REVISION = "needs_revision"
+    REJECTED = "rejected"
+    UNKNOWN = "unknown"
+
+
+class RepairAction(str, Enum):
+    """修正ループで実行する方針。"""
+
+    RERUN_AGENT = "rerun_agent"
+    ASK_HUMAN = "ask_human"
+    STOP = "stop"
+
+
+class RunStatus(str, Enum):
+    """実行全体の進行状態。"""
+
+    CREATED = "created"
+    RUNNING = "running"
+    WAITING_FOR_HUMAN = "waiting_for_human"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class SourceDocument(StrictBaseModel):
+    """業務文書から抽出したテキストと識別情報。"""
+
+    document_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    source_path: str | None = None
+
+
+class ProcedureRelation(StrictBaseModel):
+    """業務手順の前後関係を表す構造。"""
+
+    previous_step_ids: list[str] = Field(default_factory=list)
+    next_step_ids: list[str] = Field(default_factory=list)
+
+
+class BusinessProcedureStep(StrictBaseModel):
+    """業務シナリオ内の1つの業務手順。"""
+
+    step_id: str = Field(min_length=1)
+    step_name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    actor: str = Field(min_length=1)
+    input_data: list[str] = Field(default_factory=list)
+    output_data: list[str] = Field(default_factory=list)
+    relation: ProcedureRelation = Field(default_factory=ProcedureRelation)
+    branch_conditions: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    is_uncertain: bool = False
+
+
+class BusinessScenario(StrictBaseModel):
+    """固定フォーマットで表現する業務シナリオ。"""
+
+    scenario_id: str = Field(min_length=1)
+    business_name: str = Field(min_length=1)
+    participants: list[str] = Field(default_factory=list)
+    business_goal: str = Field(min_length=1)
+    business_overview: str = Field(min_length=1)
+    procedure_steps: list[BusinessProcedureStep] = Field(default_factory=list)
+    open_issues: list[str] = Field(default_factory=list)
+
+
+class ScenarioAgentInput(StrictBaseModel):
+    """シナリオ作成エージェントに渡す入力。"""
 
     document: SourceDocument
 
 
-class BusinessScenario(BaseModel):
-    """Structured scenario extracted before RDF generation."""
-
-    scenario_id: str
-    name: str
-    summary: str
-    stakeholders: list[str] = Field(default_factory=list)
-
-
-class ScenarioAgentOutput(BaseModel):
-    """Output from the scenario creation agent."""
+class ScenarioAgentOutput(StrictBaseModel):
+    """シナリオ作成エージェントから返す構造化出力。"""
 
     scenarios: list[BusinessScenario] = Field(default_factory=list)
 
 
-class WorkflowExtractionInput(BaseModel):
-    """Input for the business workflow extraction agent."""
+class WorkflowExtractionInput(StrictBaseModel):
+    """Workflow抽出エージェントに渡す入力。"""
 
     document: SourceDocument
     scenarios: list[BusinessScenario] = Field(default_factory=list)
 
 
-class WorkflowStep(BaseModel):
-    """A structured business workflow step."""
+class WorkflowStep(StrictBaseModel):
+    """Workflow RDFへ変換する前の構造化された業務フロー手順。"""
 
-    step_id: str
-    name: str
-    actor: str | None = None
-    inputs: list[str] = Field(default_factory=list)
-    outputs: list[str] = Field(default_factory=list)
+    step_id: str = Field(min_length=1)
+    step_name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    actor: str = Field(min_length=1)
+    input_data: list[str] = Field(default_factory=list)
+    output_data: list[str] = Field(default_factory=list)
+    previous_step_ids: list[str] = Field(default_factory=list)
+    next_step_ids: list[str] = Field(default_factory=list)
+    branch_conditions: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    is_uncertain: bool = False
 
 
-class WorkflowExtractionOutput(BaseModel):
-    """Output from the workflow extraction agent."""
+class WorkflowExtractionOutput(StrictBaseModel):
+    """Workflow抽出結果。"""
 
+    scenario_id: str = Field(min_length=1)
     steps: list[WorkflowStep] = Field(default_factory=list)
+    unresolved_items: list[str] = Field(default_factory=list)
 
 
-class DataRuleExtractionInput(BaseModel):
-    """Input for data and rule extraction."""
+class DataExtractionInput(StrictBaseModel):
+    """Data抽出エージェントに渡す入力。"""
 
     document: SourceDocument
     workflow_steps: list[WorkflowStep] = Field(default_factory=list)
 
 
-class DataEntity(BaseModel):
-    """A structured data entity used by the business process."""
+class DataAttribute(StrictBaseModel):
+    """業務データ項目の属性。"""
 
-    entity_id: str
-    name: str
-    attributes: list[str] = Field(default_factory=list)
+    name: str = Field(min_length=1)
+    description: str | None = None
+    data_type: str | None = None
+    required: bool | None = None
 
 
-class BusinessRule(BaseModel):
-    """A structured business rule before RDF conversion."""
+class DataEntity(StrictBaseModel):
+    """Data RDFへ変換する前の構造化された業務データ。"""
 
-    rule_id: str
-    description: str
+    entity_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str | None = None
+    attributes: list[DataAttribute] = Field(default_factory=list)
+    related_step_ids: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    is_uncertain: bool = False
+
+
+class DataExtractionOutput(StrictBaseModel):
+    """Data抽出結果。"""
+
+    entities: list[DataEntity] = Field(default_factory=list)
+    unresolved_items: list[str] = Field(default_factory=list)
+
+
+class RuleExtractionInput(StrictBaseModel):
+    """Rule抽出エージェントに渡す入力。"""
+
+    document: SourceDocument
+    workflow_steps: list[WorkflowStep] = Field(default_factory=list)
+    data_entities: list[DataEntity] = Field(default_factory=list)
+
+
+class BusinessRule(StrictBaseModel):
+    """Rule RDFへ変換する前の構造化された業務ルール。"""
+
+    rule_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    condition: str | None = None
+    action: str | None = None
     related_step_ids: list[str] = Field(default_factory=list)
     related_entity_ids: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    is_uncertain: bool = False
 
 
-class DataRuleExtractionOutput(BaseModel):
-    """Output from the data and rule extraction agent."""
+class RuleExtractionOutput(StrictBaseModel):
+    """Rule抽出結果。"""
 
-    data_entities: list[DataEntity] = Field(default_factory=list)
     rules: list[BusinessRule] = Field(default_factory=list)
+    unresolved_items: list[str] = Field(default_factory=list)
 
 
-class ShaclViolation(BaseModel):
-    """A single SHACL validation result."""
+class DataRuleExtractionInput(StrictBaseModel):
+    """Data・Rule抽出を同時に行う場合の入力。"""
 
-    focus_node: str
-    message: str
+    document: SourceDocument
+    workflow_steps: list[WorkflowStep] = Field(default_factory=list)
+
+
+class DataRuleExtractionOutput(StrictBaseModel):
+    """Data抽出結果とRule抽出結果をまとめた出力。"""
+
+    data: DataExtractionOutput = Field(default_factory=DataExtractionOutput)
+    rule: RuleExtractionOutput = Field(default_factory=RuleExtractionOutput)
+
+    @property
+    def data_entities(self) -> list[DataEntity]:
+        """既存コードとの互換用にDataエンティティ一覧を返す。"""
+
+        return self.data.entities
+
+    @property
+    def rules(self) -> list[BusinessRule]:
+        """既存コードとの互換用にRule一覧を返す。"""
+
+        return self.rule.rules
+
+
+class SelfReviewFinding(StrictBaseModel):
+    """自己レビューで見つかった個別の指摘。"""
+
+    severity: Severity
+    message: str = Field(min_length=1)
+    target_id: str | None = None
+    suggestion: str | None = None
+
+
+class SelfReviewResult(StrictBaseModel):
+    """抽出エージェント自身による出力品質レビュー結果。"""
+
+    reviewer_agent: AgentName
+    status: ReviewStatus
+    findings: list[SelfReviewFinding] = Field(default_factory=list)
+    summary: str | None = None
+
+
+class ShaclViolation(StrictBaseModel):
+    """pySHACLの検証レポートから抽出したSHACL違反。"""
+
+    focus_node: str = Field(min_length=1)
+    message: str = Field(min_length=1)
     path: str | None = None
+    source_shape: str | None = None
+    severity: Severity = Severity.ERROR
     rdf_kind: RdfKind | None = None
 
 
-class ShaclValidationResult(BaseModel):
-    """Result of pySHACL validation."""
+class ShaclValidationResult(StrictBaseModel):
+    """pySHACLによる適合判定結果。"""
 
     conforms: bool
     violations: list[ShaclViolation] = Field(default_factory=list)
+    report_text: str | None = None
 
 
-class ConsistencyEvaluationInput(BaseModel):
-    """Input for the consistency evaluation agent."""
+class ConsistencyEvaluationInput(StrictBaseModel):
+    """整合性評価エージェントに渡す入力。"""
 
     validation_result: ShaclValidationResult
     workflow: WorkflowExtractionOutput
-    data_rules: DataRuleExtractionOutput
+    data: DataExtractionOutput
+    rule: RuleExtractionOutput
 
 
-class ConsistencyEvaluationOutput(BaseModel):
-    """Recommendation for automatic repair or human review."""
+class ConsistencyEvaluationResult(StrictBaseModel):
+    """RDF間の不整合に対する評価結果。"""
 
+    status: ReviewStatus
     can_auto_repair: bool
-    target_agent: str | None = None
-    reason: str
+    target_agent: AgentName | None = None
+    reason: str = Field(min_length=1)
+    related_violation_indices: list[int] = Field(default_factory=list)
+
+
+class ConsistencyEvaluationOutput(ConsistencyEvaluationResult):
+    """既存コードとの互換用の整合性評価出力。"""
+
+
+class RepairInstruction(StrictBaseModel):
+    """修正ループで次に実行すべき処理を表す指示。"""
+
+    action: RepairAction
+    target_agent: AgentName | None = None
+    reason: str = Field(min_length=1)
+    target_ids: list[str] = Field(default_factory=list)
+    human_prompt: str | None = None
+
+
+class HumanReviewResult(StrictBaseModel):
+    """CLIで人間が確認した結果。"""
+
+    status: ReviewStatus
+    reviewer: str | None = None
+    comment: str = Field(min_length=1)
+    selected_action: RepairAction | None = None
+    corrected_text: str | None = None
+
+
+class RepairHistoryEntry(StrictBaseModel):
+    """1回分の修正試行の履歴。"""
+
+    iteration: int = Field(ge=0)
+    instruction: RepairInstruction
+    result_status: ReviewStatus
+    message: str | None = None
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class RepairHistory(StrictBaseModel):
+    """修正ループ全体の履歴。"""
+
+    entries: list[RepairHistoryEntry] = Field(default_factory=list)
+
+
+class RunState(StrictBaseModel):
+    """文書処理1回分の実行全体の状態。"""
+
+    run_id: str = Field(min_length=1)
+    status: RunStatus
+    output_dir: str = Field(min_length=1)
+    document: SourceDocument | None = None
+    scenario_output: ScenarioAgentOutput | None = None
+    workflow_output: WorkflowExtractionOutput | None = None
+    data_output: DataExtractionOutput | None = None
+    rule_output: RuleExtractionOutput | None = None
+    shacl_result: ShaclValidationResult | None = None
+    consistency_result: ConsistencyEvaluationResult | None = None
+    repair_history: RepairHistory = Field(default_factory=RepairHistory)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
