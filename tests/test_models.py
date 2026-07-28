@@ -12,6 +12,7 @@ from business_analysis_agents.models import (
     DataAttribute,
     DataEntity,
     DataExtractionOutput,
+    EvidenceSpan,
     HumanReviewResult,
     RepairAction,
     RepairHistory,
@@ -47,7 +48,7 @@ def test_models_can_be_serialized_to_json() -> None:
         input_data=["注文書"],
         output_data=["確認済み注文"],
         branch_conditions=["在庫が不足している場合は購買へ連絡する。"],
-        evidence=["営業担当者は注文書を確認する。"],
+        evidence=[EvidenceSpan(page_number=1, text="営業担当者は注文書を確認する。")],
     )
     scenario = BusinessScenario(
         scenario_id="SCN1",
@@ -68,7 +69,9 @@ def test_models_can_be_serialized_to_json() -> None:
                 actor="営業担当者",
                 input_data=["注文書"],
                 output_data=["確認済み注文"],
-                evidence=["営業担当者は注文書を確認する。"],
+                evidence=[
+                    EvidenceSpan(page_number=1, text="営業担当者は注文書を確認する。")
+                ],
             )
         ],
     )

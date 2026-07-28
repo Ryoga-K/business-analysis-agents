@@ -9,4 +9,4 @@ from business_analysis_agents.controller import run
 
 
 if __name__ == "__main__":
-    run()
+    raise SystemExit(run(sys.argv[1:]))

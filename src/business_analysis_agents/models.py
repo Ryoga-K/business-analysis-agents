@@ -76,6 +76,21 @@ class SourceDocument(StrictBaseModel):
     title: str = Field(min_length=1)
     text: str = Field(min_length=1)
     source_path: str | None = None
+    pages: list["PageText"] = Field(default_factory=list)
+
+
+class PageText(StrictBaseModel):
+    """PDFからページ単位で抽出したテキスト。"""
+
+    page_number: int = Field(ge=1)
+    text: str
+
+
+class EvidenceSpan(StrictBaseModel):
+    """抽出結果の根拠となる文書ページと本文抜粋。"""
+
+    page_number: int = Field(ge=1)
+    text: str = Field(min_length=1)
 
 
 class ProcedureRelation(StrictBaseModel):
@@ -96,7 +111,7 @@ class BusinessProcedureStep(StrictBaseModel):
     output_data: list[str] = Field(default_factory=list)
     relation: ProcedureRelation = Field(default_factory=ProcedureRelation)
     branch_conditions: list[str] = Field(default_factory=list)
-    evidence: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceSpan] = Field(default_factory=list)
     is_uncertain: bool = False
 
 
@@ -143,7 +158,7 @@ class WorkflowStep(StrictBaseModel):
     previous_step_ids: list[str] = Field(default_factory=list)
     next_step_ids: list[str] = Field(default_factory=list)
     branch_conditions: list[str] = Field(default_factory=list)
-    evidence: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceSpan] = Field(default_factory=list)
     is_uncertain: bool = False
 
 
