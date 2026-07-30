@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -67,6 +68,14 @@ class RunStatus(str, Enum):
     WAITING_FOR_HUMAN = "waiting_for_human"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class WorkflowAgentMode(str, Enum):
+    """Workflow Agent internal processing mode."""
+
+    ONTOLOGY_SETUP = "ontology_setup"
+    WORKFLOW_GENERATION = "workflow_generation"
+    WORKFLOW_REVISION = "workflow_revision"
 
 
 class SourceDocument(StrictBaseModel):
@@ -168,6 +177,99 @@ class WorkflowExtractionOutput(StrictBaseModel):
     scenario_id: str = Field(min_length=1)
     steps: list[WorkflowStep] = Field(default_factory=list)
     unresolved_items: list[str] = Field(default_factory=list)
+
+
+class WorkflowAgentOutput(StrictBaseModel):
+    """Single structured output model used by all Workflow Agent modes."""
+
+    mode: WorkflowAgentMode
+    ontology_turtle: str | None = None
+    shacl_turtle: str | None = None
+    reused_standard_terms: list[str] = Field(default_factory=list)
+    provisional_classes: list[str] = Field(default_factory=list)
+    provisional_properties: list[str] = Field(default_factory=list)
+    class_property_mapping: dict[str, Any] = Field(default_factory=dict)
+    ontology_design_notes: list[str] = Field(default_factory=list)
+    shacl_design_notes: list[str] = Field(default_factory=list)
+    unresolved_design_issues: list[str] = Field(default_factory=list)
+    ontology_version: str | None = None
+    namespace_uri: str | None = None
+    workflow_rdf_turtle: str | None = None
+    used_vocabulary_terms: list[str] = Field(default_factory=list)
+    unresolved_items: list[str] = Field(default_factory=list)
+    generation_notes: list[str] = Field(default_factory=list)
+    evidence_summary: list[str] = Field(default_factory=list)
+    revision_summary: str | None = None
+    addressed_violations: list[str] = Field(default_factory=list)
+    remaining_violations: list[str] = Field(default_factory=list)
+
+
+class RdfParseError(StrictBaseModel):
+    """RDFLib parse error details."""
+
+    error_type: str
+    error_message: str
+    line: int | None = None
+    column: int | None = None
+    iteration: int = 0
+
+
+class VocabularyValidationResult(StrictBaseModel):
+    """Validation result for unauthorized RDF vocabulary terms."""
+
+    vocabulary_conforms: bool
+    unauthorized_term_count: int = 0
+    unauthorized_terms: list[str] = Field(default_factory=list)
+
+
+class WorkflowRdfValidationResult(StrictBaseModel):
+    """Combined validation result for Workflow RDF."""
+
+    structure_conforms: bool
+    shacl_conforms: bool
+    vocabulary: VocabularyValidationResult = Field(
+        default_factory=lambda: VocabularyValidationResult(vocabulary_conforms=True)
+    )
+    parse_errors: list[RdfParseError] = Field(default_factory=list)
+    shacl_result: ShaclValidationResult | None = None
+
+    @property
+    def conforms(self) -> bool:
+        """Return True only when all validation layers pass."""
+
+        return (
+            self.structure_conforms
+            and self.shacl_conforms
+            and self.vocabulary.vocabulary_conforms
+        )
+
+
+class OntologyValidationResult(StrictBaseModel):
+    """Validation result for generated ontology and SHACL shapes."""
+
+    ontology_turtle_valid: bool
+    shacl_turtle_valid: bool
+    prefixes_defined: bool
+    domain_range_references_defined: bool
+    shapes_references_defined_terms: bool
+    no_duplicate_uri_definitions: bool
+    ontology_hash: str | None = None
+    shapes_hash: str | None = None
+    parse_errors: list[RdfParseError] = Field(default_factory=list)
+    undefined_references: list[str] = Field(default_factory=list)
+
+    @property
+    def conforms(self) -> bool:
+        """Return True when ontology and shapes are fixed for the run."""
+
+        return (
+            self.ontology_turtle_valid
+            and self.shacl_turtle_valid
+            and self.prefixes_defined
+            and self.domain_range_references_defined
+            and self.shapes_references_defined_terms
+            and self.no_duplicate_uri_definitions
+        )
 
 
 class DataExtractionInput(StrictBaseModel):

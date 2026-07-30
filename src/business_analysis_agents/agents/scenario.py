@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from agents import Agent, Runner
+from agents import Agent, AgentOutputSchema, Runner
 
 from business_analysis_agents.models import ScenarioAgentInput, ScenarioAgentOutput
 
@@ -48,7 +48,10 @@ def build_scenario_agent(model: str) -> Agent:
         name="scenario_creation_agent",
         instructions=SCENARIO_AGENT_INSTRUCTIONS,
         model=model,
-        output_type=ScenarioAgentOutput,
+        output_type=AgentOutputSchema(
+            ScenarioAgentOutput,
+            strict_json_schema=False,
+        ),
     )
 
 

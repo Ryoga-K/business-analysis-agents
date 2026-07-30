@@ -114,7 +114,7 @@ def test_run_scenario_agent_uses_structured_output(monkeypatch) -> None:
     )
 
     def fake_runner(agent, prompt):
-        assert agent.output_type is ScenarioAgentOutput
+        assert agent.output_type.output_type is ScenarioAgentOutput
         assert "推測しない" in agent.instructions
         assert "[page 1]" in prompt
         return SimpleNamespace(final_output=expected)
