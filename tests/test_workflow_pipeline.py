@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
+from agents.exceptions import ModelBehaviorError
 
 from business_analysis_agents.agents.workflow import (
     WORKFLOW_AGENT_NAME,
@@ -173,12 +175,26 @@ def test_workflow_agent_is_single_agent_with_three_modes(monkeypatch) -> None:
         assert agent.name == WORKFLOW_AGENT_NAME
         assert agent.output_type.output_type is WorkflowAgentOutput
         if "ontology_setup" in prompt:
-            mode = WorkflowAgentMode.ONTOLOGY_SETUP
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.ONTOLOGY_SETUP,
+                    ontology_turtle=ONTOLOGY_TTL,
+                    shacl_turtle=SHAPES_TTL,
+                )
+            )
         elif "workflow_generation" in prompt:
-            mode = WorkflowAgentMode.WORKFLOW_GENERATION
-        else:
-            mode = WorkflowAgentMode.WORKFLOW_REVISION
-        return SimpleNamespace(final_output=WorkflowAgentOutput(mode=mode))
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_GENERATION,
+                    workflow_rdf_turtle=VALID_WORKFLOW_TTL,
+                )
+            )
+        return SimpleNamespace(
+            final_output=WorkflowAgentOutput(
+                mode=WorkflowAgentMode.WORKFLOW_REVISION,
+                workflow_rdf_turtle=VALID_WORKFLOW_TTL,
+            )
+        )
 
     for mode in WorkflowAgentMode:
         output = run_workflow_agent(
@@ -208,6 +224,8 @@ def test_workflow_agent_output_accepts_nested_mapping() -> None:
 
     output = WorkflowAgentOutput(
         mode=WorkflowAgentMode.ONTOLOGY_SETUP,
+        ontology_turtle=ONTOLOGY_TTL,
+        shacl_turtle=SHAPES_TTL,
         class_property_mapping={
             "Workflow": ["wf:scenarioId", "wf:hasActivity"],
             "scenario_field_mapping": {
@@ -222,6 +240,70 @@ def test_workflow_agent_output_accepts_nested_mapping() -> None:
     assert dumped["class_property_mapping"]["scenario_field_mapping"]["scenario_id"] == (
         "wf:scenarioId"
     )
+
+
+def test_workflow_agent_output_keeps_explanatory_fields_flexible() -> None:
+    """Design and explanatory outputs may use evolving JSON structures."""
+
+    output = WorkflowAgentOutput(
+        mode=WorkflowAgentMode.WORKFLOW_GENERATION,
+        workflow_rdf_turtle=VALID_WORKFLOW_TTL,
+        used_vocabulary_terms={
+            "standard": ["rdf:type"],
+            "provisional": ["wf:Activity"],
+        },
+        generation_notes={
+            "policy": "no inferred triples",
+            "warnings": [{"step_id": "S1", "message": "actor is uncertain"}],
+        },
+        unresolved_items={"by_step": {"S1": ["actor identity is uncertain"]}},
+    )
+
+    dumped = output.model_dump(mode="json")
+
+    assert dumped["generation_notes"]["warnings"][0]["step_id"] == "S1"
+
+
+def test_workflow_agent_recovers_duplicate_key_output(monkeypatch) -> None:
+    """Recover first non-null Turtle when SDK validation error includes duplicate keys."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def fake_runner(_agent, _prompt):
+        raise ModelBehaviorError(
+            'Invalid JSON when parsing {"mode":"workflow_generation",'
+            f'"workflow_rdf_turtle":{json.dumps(VALID_WORKFLOW_TTL)},'
+            '"workflow_rdf_turtle":null} for TypeAdapter(WorkflowAgentOutput)'
+        )
+
+    output = run_workflow_agent(
+        WorkflowAgentMode.WORKFLOW_GENERATION,
+        payload={"scenario_json": {}},
+        model="gpt-test",
+        runner=fake_runner,
+    )
+
+    assert output.workflow_rdf_turtle == VALID_WORKFLOW_TTL
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_message"),
+    [
+        (WorkflowAgentMode.ONTOLOGY_SETUP, "ontology_turtle"),
+        (WorkflowAgentMode.WORKFLOW_GENERATION, "workflow_rdf_turtle"),
+        (WorkflowAgentMode.WORKFLOW_REVISION, "workflow_rdf_turtle"),
+    ],
+)
+def test_workflow_agent_output_allows_missing_turtle_until_pipeline_check(
+    mode: WorkflowAgentMode,
+    expected_message: str,
+) -> None:
+    """SDK parsing should not fail before the pipeline can report missing Turtle."""
+
+    output = WorkflowAgentOutput(mode=mode)
+
+    assert output.mode == mode
+    assert expected_message.endswith("_turtle")
 
 
 def test_invalid_ontology_turtle_is_detected() -> None:

@@ -130,7 +130,7 @@ def validate_vocabulary(workflow_graph: Graph, ontology_graph: Graph) -> Vocabul
     )
 
 
-def _shacl_violations(report_graph: Graph) -> list[ShaclViolation]:
+def _shacl_violations(report_graph: Graph, rdf_kind: RdfKind) -> list[ShaclViolation]:
     violations: list[ShaclViolation] = []
     for result in report_graph.subjects(RDF.type, SH.ValidationResult):
         message = next(report_graph.objects(result, SH.resultMessage), None)
@@ -145,21 +145,22 @@ def _shacl_violations(report_graph: Graph) -> list[ShaclViolation]:
                 path=str(path) if path else None,
                 source_shape=str(source_shape) if source_shape else None,
                 severity=Severity.ERROR if severity != SH.Warning else Severity.WARNING,
-                rdf_kind=RdfKind.WORKFLOW,
+                rdf_kind=rdf_kind,
             )
         )
     return violations
 
 
 def run_pyshacl(
-    workflow_graph: Graph,
+    data_graph: Graph,
     ontology_graph: Graph,
     shapes_graph: Graph,
+    rdf_kind: RdfKind = RdfKind.WORKFLOW,
 ) -> ShaclValidationResult:
-    """Validate Workflow RDF with pySHACL."""
+    """Validate RDF data with pySHACL."""
 
     conforms, report_graph, report_text = pyshacl_validate(
-        workflow_graph,
+        data_graph,
         shacl_graph=shapes_graph,
         ont_graph=ontology_graph,
         inference="rdfs",
@@ -167,7 +168,7 @@ def run_pyshacl(
     )
     return ShaclValidationResult(
         conforms=bool(conforms),
-        violations=_shacl_violations(report_graph),
+        violations=_shacl_violations(report_graph, rdf_kind),
         report_text=str(report_text),
     )
 
@@ -235,6 +236,61 @@ def validate_ontology_and_shapes(
     )
 
 
+def validate_rdf(
+    rdf_turtle: str,
+    ontology_turtle: str,
+    shacl_turtle: str,
+    iteration: int = 0,
+    rdf_kind: RdfKind = RdfKind.WORKFLOW,
+    additional_data_turtle: str | None = None,
+) -> WorkflowRdfValidationResult:
+    """Validate RDF syntax, vocabulary, and SHACL constraints."""
+
+    rdf_graph, rdf_errors = parse_turtle(rdf_turtle, iteration=iteration)
+    ontology_graph, ontology_errors = parse_turtle(ontology_turtle, iteration=iteration)
+    shapes_graph, shapes_errors = parse_turtle(shacl_turtle, iteration=iteration)
+    parse_errors = rdf_errors + ontology_errors + shapes_errors
+    if additional_data_turtle:
+        additional_graph, additional_errors = parse_turtle(
+            additional_data_turtle,
+            iteration=iteration,
+        )
+        parse_errors += additional_errors
+    else:
+        additional_graph = None
+
+    if rdf_graph is None or ontology_graph is None or shapes_graph is None:
+        return WorkflowRdfValidationResult(
+            structure_conforms=False,
+            shacl_conforms=False,
+            parse_errors=parse_errors,
+        )
+    if additional_data_turtle and additional_graph is None:
+        return WorkflowRdfValidationResult(
+            structure_conforms=False,
+            shacl_conforms=False,
+            parse_errors=parse_errors,
+        )
+
+    validation_graph = rdf_graph
+    if additional_graph is not None:
+        validation_graph = rdf_graph + additional_graph
+
+    vocabulary = validate_vocabulary(rdf_graph, ontology_graph)
+    shacl_result = run_pyshacl(
+        validation_graph,
+        ontology_graph,
+        shapes_graph,
+        rdf_kind=rdf_kind,
+    )
+    return WorkflowRdfValidationResult(
+        structure_conforms=True,
+        shacl_conforms=shacl_result.conforms,
+        vocabulary=vocabulary,
+        shacl_result=shacl_result,
+    )
+
+
 def validate_workflow_rdf(
     workflow_turtle: str,
     ontology_turtle: str,
@@ -243,25 +299,12 @@ def validate_workflow_rdf(
 ) -> WorkflowRdfValidationResult:
     """Validate Workflow RDF syntax, vocabulary, and SHACL constraints."""
 
-    workflow_graph, workflow_errors = parse_turtle(workflow_turtle, iteration=iteration)
-    ontology_graph, ontology_errors = parse_turtle(ontology_turtle, iteration=iteration)
-    shapes_graph, shapes_errors = parse_turtle(shacl_turtle, iteration=iteration)
-    parse_errors = workflow_errors + ontology_errors + shapes_errors
-
-    if workflow_graph is None or ontology_graph is None or shapes_graph is None:
-        return WorkflowRdfValidationResult(
-            structure_conforms=False,
-            shacl_conforms=False,
-            parse_errors=parse_errors,
-        )
-
-    vocabulary = validate_vocabulary(workflow_graph, ontology_graph)
-    shacl_result = run_pyshacl(workflow_graph, ontology_graph, shapes_graph)
-    return WorkflowRdfValidationResult(
-        structure_conforms=True,
-        shacl_conforms=shacl_result.conforms,
-        vocabulary=vocabulary,
-        shacl_result=shacl_result,
+    return validate_rdf(
+        workflow_turtle,
+        ontology_turtle,
+        shacl_turtle,
+        iteration=iteration,
+        rdf_kind=RdfKind.WORKFLOW,
     )
 
 

@@ -78,6 +78,16 @@ class WorkflowAgentMode(str, Enum):
     WORKFLOW_REVISION = "workflow_revision"
 
 
+class DataRuleAgentMode(str, Enum):
+    """Related data and rule extraction agent internal processing mode."""
+
+    ONTOLOGY_SETUP = "ontology_setup"
+    DATA_GENERATION = "data_generation"
+    DATA_REVISION = "data_revision"
+    RULE_GENERATION = "rule_generation"
+    RULE_REVISION = "rule_revision"
+
+
 class SourceDocument(StrictBaseModel):
     """業務文書から抽出したテキストと識別情報。"""
 
@@ -180,28 +190,68 @@ class WorkflowExtractionOutput(StrictBaseModel):
 
 
 class WorkflowAgentOutput(StrictBaseModel):
-    """Single structured output model used by all Workflow Agent modes."""
+    """Single structured output model used by all Workflow Agent modes.
+
+    The Turtle fields required by each mode are validated here. Explanatory
+    and design-oriented fields are intentionally flexible while the prototype
+    is still evolving; RDF syntax, vocabulary, and SHACL validity are checked
+    later by RDFLib and pySHACL.
+    """
 
     mode: WorkflowAgentMode
     ontology_turtle: str | None = None
     shacl_turtle: str | None = None
-    reused_standard_terms: list[str] = Field(default_factory=list)
-    provisional_classes: list[str] = Field(default_factory=list)
-    provisional_properties: list[str] = Field(default_factory=list)
+    reused_standard_terms: Any = Field(default_factory=list)
+    provisional_classes: Any = Field(default_factory=list)
+    provisional_properties: Any = Field(default_factory=list)
     class_property_mapping: dict[str, Any] = Field(default_factory=dict)
-    ontology_design_notes: list[str] = Field(default_factory=list)
-    shacl_design_notes: list[str] = Field(default_factory=list)
-    unresolved_design_issues: list[str] = Field(default_factory=list)
+    ontology_design_notes: Any = Field(default_factory=list)
+    shacl_design_notes: Any = Field(default_factory=list)
+    unresolved_design_issues: Any = Field(default_factory=list)
     ontology_version: str | None = None
     namespace_uri: str | None = None
     workflow_rdf_turtle: str | None = None
-    used_vocabulary_terms: list[str] = Field(default_factory=list)
-    unresolved_items: list[str] = Field(default_factory=list)
-    generation_notes: list[str] = Field(default_factory=list)
-    evidence_summary: list[str] = Field(default_factory=list)
+    used_vocabulary_terms: Any = Field(default_factory=list)
+    unresolved_items: Any = Field(default_factory=list)
+    generation_notes: Any = Field(default_factory=list)
+    evidence_summary: Any = Field(default_factory=list)
     revision_summary: str | None = None
-    addressed_violations: list[str] = Field(default_factory=list)
-    remaining_violations: list[str] = Field(default_factory=list)
+    addressed_violations: Any = Field(default_factory=list)
+    remaining_violations: Any = Field(default_factory=list)
+
+
+class DataRuleAgentOutput(StrictBaseModel):
+    """Single structured output model used by related data/rule extraction modes.
+
+    Only the Turtle text required by each mode is strict. Explanatory fields are
+    flexible JSON so the prototype can absorb early LLM output variance while
+    RDFLib and pySHACL validate the actual RDF content.
+    """
+
+    mode: DataRuleAgentMode
+    ontology_turtle: str | None = None
+    data_shacl_turtle: str | None = None
+    rule_shacl_turtle: str | None = None
+    data_rdf_turtle: str | None = None
+    rule_rdf_turtle: str | None = None
+    reused_standard_terms: Any = Field(default_factory=list)
+    provisional_classes: Any = Field(default_factory=list)
+    provisional_properties: Any = Field(default_factory=list)
+    class_property_mapping: dict[str, Any] = Field(default_factory=dict)
+    ontology_design_notes: Any = Field(default_factory=list)
+    data_shacl_design_notes: Any = Field(default_factory=list)
+    rule_shacl_design_notes: Any = Field(default_factory=list)
+    unresolved_design_issues: Any = Field(default_factory=list)
+    ontology_version: str | None = None
+    namespace_uri: str | None = None
+    used_vocabulary_terms: Any = Field(default_factory=list)
+    unresolved_items: Any = Field(default_factory=list)
+    generation_notes: Any = Field(default_factory=list)
+    evidence_summary: Any = Field(default_factory=list)
+    revision_summary: str | None = None
+    addressed_violations: Any = Field(default_factory=list)
+    remaining_violations: Any = Field(default_factory=list)
+
 
 
 class RdfParseError(StrictBaseModel):

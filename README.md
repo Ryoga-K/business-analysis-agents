@@ -2,17 +2,33 @@
 
 OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Workflow RDF、Data RDF、Rule RDFを生成・検証する研究用プロトタイプです。
 
-現時点では最小の起動確認とテストだけを実装しています。エージェント実行、RDF変換、SHACL検証、修正ループ、人間レビューは読みやすいひな型として配置し、未実装箇所にはTODOを残しています。
+現在は、PDFから業務シナリオJSONを生成し、そのシナリオJSONを入力としてWorkflow RDF、Data RDF、Rule RDFを生成・検証・修正する最小パイプラインまで実装しています。Web UI、DB保存、人間レビューUI、RDF間Cross Reviewはまだ実装していません。
 
-## 方針
+## 実装済み
 
-- エージェントごとの入力と出力はPydanticモデルで明示する。
-- LLMの出力から直接Turtle文字列を作らず、構造化データをPythonコードでRDFへ変換する。
-- SHACLの適合判定はLLMではなくpySHACLで行う。
-- 反復回数と終了条件はPythonコードで管理する。
-- 実行結果は `outputs/run_YYYYMMDD_HHMMSS/` 以下に保存する。
-- SQLやデータベース、Web UIは使用しない。
-- 人間レビューは `input()` と `print()` によるCLIで行う。
+- PyMuPDFによるPDFテキストのページ単位抽出
+- Scenario Agentによる固定フォーマットの業務シナリオJSON生成
+- Workflow AgentによるWorkflow RDF生成
+- Workflow用の暫定RDFS ontologyとSHACL Shapes生成
+- Workflow RDFのRDFLib構文検証、語彙検証、pySHACL検証
+- Workflow RDFの修正ループ
+- 関連データ・ルール抽出AgentによるData RDF / Rule RDF生成
+- Data/Rule用の暫定RDFS ontology、Data SHACL、Rule SHACL生成
+- Data RDFの生成、検証、修正ループ
+- 検証済みData RDFを参照したRule RDFの生成、検証、修正ループ
+- 実行結果のJSON / Turtle保存
+- APIを呼ばないモックpytest
+
+## 設計方針
+
+- エージェント出力はPydanticによる構造化出力として受け取る。
+- 説明的・設計的な出力は柔軟なJSONとして扱う。
+- 各モードで必要なTurtle文字列はパイプライン側で明示的に確認する。
+- Turtle本文はPydanticでは `str` として受け取り、内容の妥当性はRDFLibとpySHACLで検証する。
+- LLMが生成したWorkflow/Data/Rule RDFをPython側で機械的に補完しない。
+- シナリオJSONにない業務内容は推測せず、未確定事項として残す。
+- ontologyとSHACL Shapesは生成後に固定し、revisionではRDF本体だけを修正する。
+- SQL、DB、Web UIは現時点では使用しない。
 
 ## ディレクトリ構成
 
@@ -21,21 +37,31 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 ├── main.py
 ├── pyproject.toml
 ├── .env.example
-├── .gitignore
 ├── README.md
 ├── src/
 │   └── business_analysis_agents/
+│       ├── __main__.py
 │       ├── agents/
-│       ├── rdf/
-│       ├── review/
-│       ├── shacl/
-│       ├── config.py
+│       │   ├── scenario.py
+│       │   ├── workflow.py
+│       │   ├── data_rule.py
+│       │   └── consistency.py
 │       ├── controller.py
+│       ├── config.py
 │       ├── document_loader.py
 │       ├── models.py
-│       └── repair_loop.py
+│       ├── rdf_validation.py
+│       ├── workflow_pipeline.py
+│       ├── data_rule_pipeline.py
+│       ├── rdf/
+│       ├── shacl/
+│       └── review/
 └── tests/
-    └── test_startup.py
+    ├── test_startup.py
+    ├── test_scenario_generation.py
+    ├── test_workflow_pipeline.py
+    ├── test_data_rule_pipeline.py
+    └── test_models.py
 ```
 
 ## セットアップ
@@ -47,31 +73,179 @@ pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-`.env` に `OPENAI_API_KEY` を設定してください。現在の起動確認ではAPI呼び出しは行いません。
+`.env` には次の値を設定します。
 
-## 起動
+```env
+OPENAI_API_KEY=
+OPENAI_MODEL=
+MAX_REPAIR_ITERATIONS=3
+OUTPUT_DIR=outputs
+```
+
+`OPENAI_API_KEY` はコードに埋め込まず、環境変数または `.env` から読み込みます。
+
+## 使い方
+
+### 1. 起動確認
 
 ```powershell
 python main.py
 ```
 
-期待される出力:
+出力:
 
 ```text
 システムを開始しました
 ```
 
-## テスト
+### 2. PDFから業務シナリオJSONを生成
 
 ```powershell
-pytest
+python main.py inputs\sample.pdf
 ```
 
-## 今後の実装候補
+出力例:
 
-- PyMuPDFによるPDF文書読み込み
-- OpenAI Agents SDKによる各抽出エージェントの実行
-- Pydantic構造化出力からRDFLibグラフへの変換
-- pySHACLによる構造検証とRDF間整合性検証
-- 違反箇所に応じた抽出エージェントの再実行
-- 自動修正不能時のCLI人間レビュー
+```text
+outputs/run_YYYYMMDD_HHMMSS/scenario.json
+```
+
+### 3. シナリオJSONからWorkflow RDFを生成
+
+```powershell
+python -m business_analysis_agents workflow --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json
+```
+
+既存のWorkflow ontology / SHACL Shapesを再利用する場合:
+
+```powershell
+python -m business_analysis_agents workflow `
+  --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json `
+  --ontology outputs\workflow\workflow_ontology_v0_1.ttl `
+  --shapes outputs\workflow\workflow_shapes_v0_1.ttl
+```
+
+主な出力先:
+
+```text
+outputs/workflow/
+```
+
+主な出力ファイル:
+
+- `workflow_ontology_v0_1.ttl`
+- `workflow_shapes_v0_1.ttl`
+- `workflow_ontology_design.json`
+- `workflow_ontology_validation.json`
+- `workflow_ontology_history.json`
+- `workflow_final.ttl`
+- `workflow_agent_output.json`
+- `workflow_validation.json`
+- `workflow_revision_history.json`
+- `workflow_run_metadata.json`
+
+### 4. シナリオJSONからData RDF / Rule RDFを生成
+
+```powershell
+python -m business_analysis_agents data-rule --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json
+```
+
+主な出力先:
+
+```text
+outputs/data_rule/
+```
+
+主な出力ファイル:
+
+- `data_rule_ontology_v0_1.ttl`
+- `data_shapes_v0_1.ttl`
+- `rule_shapes_v0_1.ttl`
+- `data_rule_ontology_design.json`
+- `data_ontology_validation.json`
+- `rule_ontology_validation.json`
+- `data_rule_ontology_history.json`
+- `data_initial.ttl`
+- `data_final.ttl`
+- `rule_initial.ttl`
+- `rule_final.ttl`
+- `data_agent_output.json`
+- `rule_agent_output.json`
+- `data_validation.json`
+- `rule_validation.json`
+- `data_revision_history.json`
+- `rule_revision_history.json`
+- `data_rule_run_metadata.json`
+
+## エージェント構成
+
+### Scenario Agent
+
+PDFから抽出したページ番号付きテキストを入力し、固定フォーマットの業務シナリオJSONを生成します。
+
+主な出力:
+
+- 業務名
+- 登場人物
+- 業務目的
+- 業務概要
+- 業務手順
+- 未確定事項
+
+### Workflow Agent
+
+外部的には1つのAIエージェントです。内部モードで処理を分けます。
+
+- `ontology_setup`: Workflow用の暫定RDFS ontologyとSHACL Shapesを生成
+- `workflow_generation`: シナリオJSONからWorkflow RDFを生成
+- `workflow_revision`: 検証結果に基づきWorkflow RDFだけを修正
+
+### 関連データ・ルール抽出Agent
+
+外部的には1つのAIエージェントです。内部モードでData RDFとRule RDFを順番に処理します。
+
+- `ontology_setup`: Data/Rule用の暫定RDFS ontology、Data SHACL、Rule SHACLを生成
+- `data_generation`: シナリオJSONからData RDFを生成
+- `data_revision`: 検証結果に基づきData RDFだけを修正
+- `rule_generation`: 検証済みData RDFを参照してRule RDFを生成
+- `rule_revision`: 検証結果に基づきRule RDFだけを修正
+
+## 検証
+
+RDFの検証はLLMではなくPython側で行います。
+
+- RDFLib: Turtle構文解析
+- RDFLib: ontology / SHACL Shapesの構文検証
+- RDFLib: 未定義語彙・許可外語彙の検出
+- pySHACL: SHACL制約検証
+- Python: 最大反復回数、終了条件、ontology / shapesのハッシュ固定確認
+
+通常のpytestでは実APIを呼びません。
+
+```powershell
+python -m pytest
+```
+
+直近の確認結果:
+
+```text
+38 passed
+```
+
+## 未実装
+
+- Workflow RDF / Data RDF / Rule RDF間のCross Review
+- 3種類RDF全体の整合性評価エージェント
+- 人間レビューUI
+- 人間への問い合わせ生成UI
+- DB保存
+- 本番用の固定ontology設計
+- PDF再読み込みによるData/Rule補完
+- Scenario Agent、Workflow Agentの大規模な再設計
+
+## 注意
+
+- `outputs/` は `.gitignore` 対象です。
+- 機密PDFはリポジトリにコミットしないでください。
+- 研究用プロトタイプのため、LLM出力が不安定な場合があります。
+- LLMがJSONキーを重複出力した場合に備え、一部のAgent出力は復元処理を持っています。

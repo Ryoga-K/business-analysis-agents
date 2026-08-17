@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import json
 from collections.abc import Callable
 from typing import Any
 
 from agents import Agent, AgentOutputSchema, Runner
+from agents.exceptions import ModelBehaviorError
 
 from business_analysis_agents.models import WorkflowAgentMode, WorkflowAgentOutput
 
@@ -23,6 +25,8 @@ General rules:
 - Do not infer activities, actors, data, conditions, order, or evidence that are not in the scenario.
 - Do not complete uncertain information aggressively. Put it in unresolved items.
 - Use one WorkflowAgentOutput Pydantic model for every mode.
+- Explanatory and design-oriented fields may use flexible JSON structures.
+- RDF syntax, vocabulary, and SHACL validity are checked by RDFLib and pySHACL, not by Pydantic.
 - For Workflow RDF, output complete Turtle text in workflow_rdf_turtle.
 - Do not wrap Turtle in Markdown fences.
 - During workflow_revision, do not change ontology_turtle or shacl_turtle.
@@ -52,8 +56,8 @@ You do not have to adopt these exact names; choose terms that fit the scenario a
 the mapping in class_property_mapping.
 
 Generate:
-- ontology_turtle
-- shacl_turtle
+- ontology_turtle (required)
+- shacl_turtle (required)
 - reused_standard_terms
 - provisional_classes
 - provisional_properties
@@ -78,6 +82,7 @@ Rules:
 - Create order relations only when order is explicit in the scenario.
 - Avoid assigning multiple URIs to the same conceptual entity.
 - Put unresolved items in unresolved_items instead of inventing missing information.
+- workflow_rdf_turtle is required.
 """.strip()
 
 WORKFLOW_REVISION_INSTRUCTIONS = """
@@ -95,6 +100,7 @@ Forbidden:
 Use the RDFLib parse errors, vocabulary validation result, SHACL validation result,
 and revision history to fix the Workflow RDF. If a problem cannot be fixed without
 unsupported business assumptions, keep it in remaining_violations and unresolved_items.
+workflow_rdf_turtle is required.
 """.strip()
 
 
@@ -138,9 +144,37 @@ def build_workflow_prompt(mode: WorkflowAgentMode, payload: dict[str, Any]) -> s
 
     return (
         f"{_mode_instructions(mode)}\n\n"
-        f"Return WorkflowAgentOutput with mode='{mode.value}'.\n\n"
+        f"Return WorkflowAgentOutput with mode='{mode.value}'. "
+        "Only the Turtle string required by this mode is mandatory; explanatory fields may be flexible JSON. "
+        "Do not repeat JSON keys. Omit irrelevant Turtle fields instead of setting them to null.\n\n"
         f"Input payload:\n{payload}"
     )
+
+
+def _first_non_null_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build a dict while preserving the first non-null value for duplicate keys."""
+
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key not in result or result[key] is None:
+            result[key] = value
+    return result
+
+
+def _recover_output_from_model_error(error: ModelBehaviorError) -> WorkflowAgentOutput | None:
+    """Recover structured output from an Agents SDK validation error when possible."""
+
+    message = str(error)
+    marker = "Invalid JSON when parsing "
+    if marker not in message:
+        return None
+    start = message.find(marker) + len(marker)
+    decoder = json.JSONDecoder(object_pairs_hook=_first_non_null_pairs)
+    try:
+        payload, _ = decoder.raw_decode(message[start:])
+    except json.JSONDecodeError:
+        return None
+    return WorkflowAgentOutput.model_validate(payload)
 
 
 def run_workflow_agent(
@@ -155,7 +189,13 @@ def run_workflow_agent(
     agent = build_workflow_agent(model)
     prompt = build_workflow_prompt(mode, payload)
     run = runner or Runner.run_sync
-    result = run(agent, prompt)
+    try:
+        result = run(agent, prompt)
+    except ModelBehaviorError as error:
+        recovered = _recover_output_from_model_error(error)
+        if recovered is not None:
+            return recovered
+        raise
     final_output = getattr(result, "final_output", result)
     if isinstance(final_output, WorkflowAgentOutput):
         return final_output
