@@ -16,49 +16,49 @@ from business_analysis_agents.models import DataRuleAgentMode, DataRuleAgentOutp
 DATA_RULE_AGENT_NAME = "related_data_rule_agent"
 
 BASE_DATA_RULE_INSTRUCTIONS = """
-You are the only AI agent responsible for related data and rule extraction.
-Do not create separate Data Agent, Rule Agent, or Ontology Design Agent.
+あなたは関連データ抽出とルール抽出を担当する唯一のAIエージェントです。
+Data Agent、Rule Agent、Ontology Design Agentなどの別エージェントを作成しないでください。
 
-General rules:
-- Use the supplied business scenario JSON as the only business source.
-- Do not reread or infer from the original PDF.
-- Do not infer data, attributes, relationships, judgment conditions, or outcomes that are not in the scenario.
-- Use evidence page numbers and evidence text already present in the scenario.
-- Keep uncertain or unsupported content in unresolved_items.
-- Output Data RDF and Rule RDF directly as complete Turtle text when requested.
-- Do not build intermediate business RDF JSON.
-- RDF syntax, vocabulary, and SHACL validity are checked by RDFLib and pySHACL, not by Pydantic.
-- Explanatory and design-oriented fields may use flexible JSON structures.
-- During revision modes, do not change ontology_turtle or SHACL shapes.
-- Do not wrap Turtle in Markdown fences.
+全体ルール:
+- 入力された業務シナリオJSONだけを業務情報の根拠にしてください。
+- 元PDFを再読込したり、元PDFに基づく推測をしたりしないでください。
+- シナリオに書かれていないデータ、属性、関係、判定条件、結果を推測しないでください。
+- シナリオ内に既に含まれている根拠ページ番号と根拠テキストを使ってください。
+- 不確実または根拠不足の内容はunresolved_itemsに残してください。
+- 指示された場合、Data RDFとRule RDFは完全なTurtle文字列として直接出力してください。
+- 中間的な業務RDF JSONは作成しないでください。
+- RDF構文、語彙、SHACL適合性はPydanticではなくRDFLibとpySHACLで検証されます。
+- 説明用・設計用フィールドは、柔軟なJSON構造で返してかまいません。
+- revision系モードではontology_turtleやSHACL shapesを変更しないでください。
+- TurtleをMarkdownコードフェンスで囲まないでください。
 """.strip()
 
 ONTOLOGY_SETUP_INSTRUCTIONS = """
 Mode: ontology_setup
-Analyze the scenario JSON and design provisional RDFS terms for Data RDF and Rule RDF.
-Reuse RDF, RDFS, XSD, and PROV-O only where the terms really exist and fit.
-Do not invent URIs for external standard vocabularies.
+シナリオJSONを分析し、Data RDFとRule RDFに必要な暫定RDFS語彙を設計してください。
+RDF、RDFS、XSD、PROV-Oは、実在し、意味が合う場合だけ再利用してください。
+外部標準語彙のURIを勝手に作らないでください。
 
-Consider provisional Data RDF concepts such as:
+Data RDFの暫定概念として、例えば次を検討してください:
 DataEntity, Document, Form, ApplicationForm, Notification, Result, DataAttribute,
 Evidence, UnresolvedItem.
 
-Consider provisional Data RDF properties such as:
+Data RDFの暫定プロパティとして、例えば次を検討してください:
 hasAttribute, relatedTo, usedBy, generatedBy, submittedBy, issuedBy, managedBy,
 hasEvidence, hasUnresolvedItem.
 
-Consider provisional Rule RDF concepts such as:
+Rule RDFの暫定概念として、例えば次を検討してください:
 BusinessRule, DecisionRule, EligibilityRule, Condition, Criterion, RuleOutcome,
 Evidence, UnresolvedItem.
 
-Consider provisional Rule RDF properties such as:
+Rule RDFの暫定プロパティとして、例えば次を検討してください:
 hasCondition, usesData, producesResult, appliesTo, evaluatedBy, hasOutcome,
 hasEvidence, hasUnresolvedItem, dependsOnRule.
 
-Generate:
-- ontology_turtle (required)
-- data_shacl_turtle (required)
-- rule_shacl_turtle (required)
+生成するフィールド:
+- ontology_turtle (必須)
+- data_shacl_turtle (必須)
+- rule_shacl_turtle (必須)
 - reused_standard_terms
 - provisional_classes
 - provisional_properties
@@ -73,53 +73,51 @@ Generate:
 
 DATA_GENERATION_INSTRUCTIONS = """
 Mode: data_generation
-Use only the fixed ontology_turtle and fixed Data SHACL shapes supplied in the prompt.
-Generate Data RDF directly as complete Turtle text.
+プロンプトで与えられた固定済みのontology_turtleとData SHACL shapesだけを使ってください。
+Data RDFを完全なTurtle文字列として直接生成してください。
 
-Represent only data concepts confirmed in the scenario, including documents, forms,
-notifications, results, data attributes explicitly described, data usage/generation
-by business activities, responsible actors when explicitly stated, evidence, and
-unresolved items.
+シナリオで確認できるデータ概念だけを表現してください。対象には、文書、帳票、
+通知、結果、明示されたデータ属性、業務活動によるデータ利用・生成、
+明示された責任主体、根拠、未解決事項を含めてください。
 
-Do not add generic form attributes that are not written in the scenario.
-Use normalized identifiers to avoid duplicate URIs for the same data concept.
-data_rdf_turtle is required.
+シナリオに書かれていない汎用的な帳票属性を追加しないでください。
+同じデータ概念に重複URIを割り当てないよう、正規化した識別子を使ってください。
+data_rdf_turtleは必須です。
 """.strip()
 
 DATA_REVISION_INSTRUCTIONS = """
 Mode: data_revision
-Revise only data_rdf_turtle.
+data_rdf_turtleだけを修正してください。
 
-Use RDFLib parse errors, vocabulary validation, pySHACL results, revision history,
-and the original scenario JSON. Do not modify ontology_turtle or Data SHACL shapes.
-Do not add unsupported scenario information. Remove unsupported information or keep
-it as unresolved when appropriate.
-data_rdf_turtle is required.
+RDFLibのparse error、語彙検証結果、pySHACL結果、修正履歴、
+元のシナリオJSONを使って修正してください。ontology_turtleやData SHACL shapesは変更しないでください。
+根拠のないシナリオ情報を追加しないでください。根拠不足の情報は削除するか、
+必要に応じて未解決事項として残してください。
+data_rdf_turtleは必須です。
 """.strip()
 
 RULE_GENERATION_INSTRUCTIONS = """
 Mode: rule_generation
-Use only the fixed ontology_turtle, fixed Rule SHACL shapes, scenario JSON, and
-validated Data RDF supplied in the prompt.
-Generate Rule RDF directly as complete Turtle text.
+プロンプトで与えられた固定済みのontology_turtle、固定済みのRule SHACL shapes、
+シナリオJSON、検証済みData RDFだけを使ってください。
+Rule RDFを完全なTurtle文字列として直接生成してください。
 
-Represent only judgment conditions, eligibility/application conditions, exclusion
-conditions, required documents, outcomes, and data references confirmed in the
-scenario. Do not invent numeric formulas, thresholds, AND/OR/NOT structures, or
-formal expressions unless explicit in the scenario.
-When referencing data, reuse entities defined in the validated Data RDF where possible.
-rule_rdf_turtle is required.
+シナリオで確認できる判定条件、資格・申請条件、除外条件、必要書類、
+結果、データ参照だけを表現してください。シナリオで明示されていない数式、
+閾値、AND/OR/NOT構造、形式的な式を作らないでください。
+データを参照する場合は、可能な限り検証済みData RDFで定義されたエンティティを再利用してください。
+rule_rdf_turtleは必須です。
 """.strip()
 
 RULE_REVISION_INSTRUCTIONS = """
 Mode: rule_revision
-Revise only rule_rdf_turtle.
+rule_rdf_turtleだけを修正してください。
 
-Use the previous Rule RDF, validated Data RDF, fixed ontology_turtle, fixed Rule
-SHACL shapes, RDFLib parse errors, vocabulary validation, pySHACL results, revision
-history, and the original scenario JSON. Do not modify ontology_turtle or Rule
-SHACL shapes. Do not add unsupported business rules.
-rule_rdf_turtle is required.
+前回のRule RDF、検証済みData RDF、固定済みontology_turtle、固定済みRule SHACL shapes、
+RDFLibのparse error、語彙検証結果、pySHACL結果、修正履歴、元のシナリオJSONを使って
+修正してください。ontology_turtleやRule SHACL shapesは変更しないでください。
+根拠のない業務ルールを追加しないでください。
+rule_rdf_turtleは必須です。
 """.strip()
 
 
@@ -167,10 +165,10 @@ def build_data_rule_prompt(mode: DataRuleAgentMode, payload: dict[str, Any]) -> 
 
     return (
         f"{_mode_instructions(mode)}\n\n"
-        f"Return DataRuleAgentOutput with mode='{mode.value}'. "
-        "Only the Turtle string required by this mode is mandatory; explanatory fields may be flexible JSON. "
-        "Do not repeat JSON keys. Omit irrelevant Turtle fields instead of setting them to null.\n\n"
-        f"Input payload:\n{payload}"
+        f"mode='{mode.value}' のDataRuleAgentOutputを返してください。"
+        "このモードで必要なTurtle文字列だけが必須です。説明用フィールドは柔軟なJSONでかまいません。"
+        "JSONキーを重複させないでください。不要なTurtleフィールドはnullにせず、省略してください。\n\n"
+        f"入力ペイロード:\n{payload}"
     )
 
 
