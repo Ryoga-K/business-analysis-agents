@@ -1,0 +1,39 @@
+@prefix bbo: <https://www.irit.fr/recherches/MELODI/ontologies/BBO#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+bbo:ProcessShape a sh:NodeShape ;
+    sh:targetClass bbo:Process ;
+    sh:property [
+        sh:path bbo:name ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string
+    ] ;
+    sh:property [
+        sh:path bbo:has_flowElements ;
+        sh:minCount 1 ;
+        sh:class bbo:FlowElement
+    ] .
+
+bbo:ActivityShape a sh:NodeShape ;
+    sh:targetClass bbo:Activity ;
+    sh:property [
+        sh:path bbo:name ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string
+    ] .
+
+bbo:SequenceFlowShape a sh:NodeShape ;
+    sh:targetClass bbo:SequenceFlow ;
+    sh:property [
+        sh:path bbo:has_sourceRef ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:class bbo:FlowNode
+    ] ;
+    sh:property [
+        sh:path bbo:has_targetRef ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:class bbo:FlowNode
+    ] .

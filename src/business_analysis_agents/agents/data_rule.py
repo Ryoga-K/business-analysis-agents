@@ -16,11 +16,12 @@ from business_analysis_agents.models import DataRuleAgentMode, DataRuleAgentOutp
 DATA_RULE_AGENT_NAME = "related_data_rule_agent"
 
 BASE_DATA_RULE_INSTRUCTIONS = """
-あなたは関連データ抽出とルール抽出を担当する唯一のAIエージェントです。
-Data Agent、Rule Agent、Ontology Design Agentなどの別エージェントを作成しないでください。
+あなたは関連データ抽出とルール抽出を担当するAIエージェントです。
 
 全体ルール:
 - 入力された業務シナリオJSONだけを業務情報の根拠にしてください。
+- 各処理で与えられたOntology TTLを唯一の業務語彙体系として扱ってください。
+- Ontology TTLやSHACL TTLを生成・変更しないでください。
 - 元PDFを再読込したり、元PDFに基づく推測をしたりしないでください。
 - シナリオに書かれていないデータ、属性、関係、判定条件、結果を推測しないでください。
 - シナリオ内に既に含まれている根拠ページ番号と根拠テキストを使ってください。
@@ -29,52 +30,21 @@ Data Agent、Rule Agent、Ontology Design Agentなどの別エージェントを
 - 中間的な業務RDF JSONは作成しないでください。
 - RDF構文、語彙、SHACL適合性はPydanticではなくRDFLibとpySHACLで検証されます。
 - 説明用・設計用フィールドは、柔軟なJSON構造で返してかまいません。
-- revision系モードではontology_turtleやSHACL shapesを変更しないでください。
 - TurtleをMarkdownコードフェンスで囲まないでください。
-""".strip()
-
-ONTOLOGY_SETUP_INSTRUCTIONS = """
-Mode: ontology_setup
-シナリオJSONを分析し、Data RDFとRule RDFに必要な暫定RDFS語彙を設計してください。
-RDF、RDFS、XSD、PROV-Oは、実在し、意味が合う場合だけ再利用してください。
-外部標準語彙のURIを勝手に作らないでください。
-
-Data RDFの暫定概念として、例えば次を検討してください:
-DataEntity, Document, Form, ApplicationForm, Notification, Result, DataAttribute,
-Evidence, UnresolvedItem.
-
-Data RDFの暫定プロパティとして、例えば次を検討してください:
-hasAttribute, relatedTo, usedBy, generatedBy, submittedBy, issuedBy, managedBy,
-hasEvidence, hasUnresolvedItem.
-
-Rule RDFの暫定概念として、例えば次を検討してください:
-BusinessRule, DecisionRule, EligibilityRule, Condition, Criterion, RuleOutcome,
-Evidence, UnresolvedItem.
-
-Rule RDFの暫定プロパティとして、例えば次を検討してください:
-hasCondition, usesData, producesResult, appliesTo, evaluatedBy, hasOutcome,
-hasEvidence, hasUnresolvedItem, dependsOnRule.
-
-生成するフィールド:
-- ontology_turtle (必須)
-- data_shacl_turtle (必須)
-- rule_shacl_turtle (必須)
-- reused_standard_terms
-- provisional_classes
-- provisional_properties
-- class_property_mapping
-- ontology_design_notes
-- data_shacl_design_notes
-- rule_shacl_design_notes
-- unresolved_design_issues
-- ontology_version
-- namespace_uri
+- 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
+- 業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
+- Ontology TTLのrdfs:label、rdfs:comment、rdfs:subClassOf、rdfs:domain、rdfs:rangeを参照し、最も適切な語彙を選択してください。
 """.strip()
 
 DATA_GENERATION_INSTRUCTIONS = """
 Mode: data_generation
 プロンプトで与えられた固定済みのontology_turtleとData SHACL shapesだけを使ってください。
 Data RDFを完全なTurtle文字列として直接生成してください。
+
+与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
+業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
+Ontology TTLの定義を参照して、最も適切な語彙を選択してください。
+RDFの構文上必要なrdf:type以外は、Ontology TTLで定義されたPropertyだけを使ってください。
 
 シナリオで確認できるデータ概念だけを表現してください。対象には、文書、帳票、
 通知、結果、明示されたデータ属性、業務活動によるデータ利用・生成、
@@ -101,6 +71,11 @@ Mode: rule_generation
 プロンプトで与えられた固定済みのontology_turtle、固定済みのRule SHACL shapes、
 シナリオJSON、検証済みData RDFだけを使ってください。
 Rule RDFを完全なTurtle文字列として直接生成してください。
+
+与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
+業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
+Ontology TTLの定義を参照して、最も適切な語彙を選択してください。
+RDFの構文上必要なrdf:type以外は、Ontology TTLで定義されたPropertyだけを使ってください。
 
 シナリオで確認できる判定条件、資格・申請条件、除外条件、必要書類、
 結果、データ参照だけを表現してください。シナリオで明示されていない数式、
@@ -149,8 +124,6 @@ def build_data_rule_agent(model: str) -> Agent:
 
 
 def _mode_instructions(mode: DataRuleAgentMode) -> str:
-    if mode is DataRuleAgentMode.ONTOLOGY_SETUP:
-        return ONTOLOGY_SETUP_INSTRUCTIONS
     if mode is DataRuleAgentMode.DATA_GENERATION:
         return DATA_GENERATION_INSTRUCTIONS
     if mode is DataRuleAgentMode.DATA_REVISION:

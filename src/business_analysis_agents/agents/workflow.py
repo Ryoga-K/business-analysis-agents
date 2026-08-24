@@ -1,4 +1,4 @@
-"""Workflow Agent with ontology setup, RDF generation, and revision modes."""
+"""Workflow Agent with RDF generation and revision modes."""
 
 from __future__ import annotations
 
@@ -16,12 +16,12 @@ from business_analysis_agents.models import WorkflowAgentMode, WorkflowAgentOutp
 WORKFLOW_AGENT_NAME = "workflow_agent"
 
 BASE_WORKFLOW_INSTRUCTIONS = """
-あなたはWorkflow RDF抽出を担当する唯一のAIエージェントです。
-Ontology Design Agentなどの別エージェントを作成したり、処理を委任したりしないでください。
+あなたはWorkflow RDF抽出を担当するAIエージェントです。
 
 全体ルール:
-- ontology設計は、このWorkflow Agentの内部モードとして扱ってください。
 - 入力された業務シナリオJSONだけを業務情報の根拠にしてください。
+- 与えられたOntology TTLを唯一の業務語彙体系として扱ってください。
+- Ontology TTLやSHACL TTLを生成・変更しないでください。
 - シナリオに書かれていない活動、実行主体、データ、条件、順序、根拠を推測しないでください。
 - 不確実な情報を無理に補完しないでください。不明点はunresolved_itemsに入れてください。
 - すべてのモードでWorkflowAgentOutput Pydanticモデルを使って返してください。
@@ -29,56 +29,23 @@ Ontology Design Agentなどの別エージェントを作成したり、処理�
 - RDF構文、語彙、SHACL適合性はPydanticではなくRDFLibとpySHACLで検証されます。
 - Workflow RDFは、完全なTurtle文字列としてworkflow_rdf_turtleに出力してください。
 - TurtleをMarkdownコードフェンスで囲まないでください。
-- workflow_revision中はontology_turtleやshacl_turtleを変更しないでください。
-""".strip()
-
-ONTOLOGY_SETUP_INSTRUCTIONS = """
-Mode: ontology_setup
-シナリオJSONを分析し、Workflow RDFに必要な暫定語彙を決めてください。
-基本的なBPMN概念を参考にし、実用的な範囲でRDF、RDFS、XSD、PROV-Oを再利用してください。
-複雑なOWL推論ではなく、RDFSレベルのontologyにしてください。
-
-少なくとも次を表現できるようにしてください:
-- 業務フロー全体
-- 活動
-- 実行主体
-- 入力データ
-- 出力データ
-- 活動の順序
-- 分岐条件
-- 抽出根拠
-- 未解決事項
-
-クラス名にはWorkflow、Activity、Actor、DataObject、Condition、Evidenceなどを使ってかまいません。
-プロパティ名にはhasActivity、performedBy、hasInput、hasOutput、
-precedes、hasCondition、hasEvidence、sourcePage、evidenceTextなどを使ってかまいません。
-これらの名前を必ず採用する必要はありません。シナリオに合う語彙を選び、
-class_property_mappingに対応関係を記録してください。
-
-生成するフィールド:
-- ontology_turtle (必須)
-- shacl_turtle (必須)
-- reused_standard_terms
-- provisional_classes
-- provisional_properties
-- class_property_mapping
-- ontology_design_notes
-- shacl_design_notes
-- unresolved_design_issues
-- ontology_version
-- namespace_uri
+- 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
+- 業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
+- Ontology TTLのrdfs:label、rdfs:comment、rdfs:subClassOf、rdfs:domain、rdfs:rangeを参照し、最も適切な語彙を選択してください。
 """.strip()
 
 WORKFLOW_GENERATION_INSTRUCTIONS = """
 Mode: workflow_generation
-プロンプトで与えられた固定済みのontology_turtleとshacl_turtleだけを使ってください。
+プロンプトで与えられた固定済みのontology_turtleとshacl_turtleを参照してください。
 Workflow RDFを完全なTurtle文字列として直接生成してください。
 
 ルール:
-- 固定ontologyで利用可能なクラス・プロパティ、および一般的なRDF/RDFS/XSD/PROV語彙だけを使ってください。
-- 新しいクラス、プロパティ、namespaceを追加しないでください。
-- プロンプトで与えられたnamespace URIの命名方針に従ってください。
-- 主要な活動と条件には、根拠ページ番号と根拠テキストを含めてください。
+- 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
+- 業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
+- Ontology TTLの定義を参照して、最も適切な語彙を選択してください。
+- RDFの構文上必要なrdf:type以外は、Ontology TTLで定義されたPropertyだけを使ってください。
+- 根拠を表すClass・PropertyがOntology TTLに定義されている場合だけ、根拠ページ番号と根拠テキストをRDFに含めてください。
+- 根拠用語がOntology TTLに存在しない場合は、新しい語彙を作らずevidence_summaryに記録してください。
 - 順序関係は、シナリオで順序が明示されている場合だけ作成してください。
 - 同じ概念エンティティに複数のURIを割り当てないようにしてください。
 - 不明な情報を補完せず、unresolved_itemsに入れてください。
@@ -132,8 +99,6 @@ def build_workflow_agent(model: str) -> Agent:
 
 
 def _mode_instructions(mode: WorkflowAgentMode) -> str:
-    if mode is WorkflowAgentMode.ONTOLOGY_SETUP:
-        return ONTOLOGY_SETUP_INSTRUCTIONS
     if mode is WorkflowAgentMode.WORKFLOW_GENERATION:
         return WORKFLOW_GENERATION_INSTRUCTIONS
     return WORKFLOW_REVISION_INSTRUCTIONS

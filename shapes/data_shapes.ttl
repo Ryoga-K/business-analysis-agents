@@ -1,0 +1,12 @@
+@prefix data: <https://example.org/business-analysis/data#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+data:DataEntityShape a sh:NodeShape ;
+    sh:targetClass data:DataEntity ;
+    sh:property [ sh:path data:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+
+data:EvidenceShape a sh:NodeShape ;
+    sh:targetClass data:Evidence ;
+    sh:property [ sh:path data:sourcePage ; sh:minCount 1 ; sh:datatype xsd:integer ] ;
+    sh:property [ sh:path data:evidenceText ; sh:minCount 1 ; sh:datatype xsd:string ] .

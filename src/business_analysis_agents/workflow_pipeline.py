@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from business_analysis_agents.agents.workflow import run_workflow_agent
+from business_analysis_agents.fixed_resources import (
+    DEFAULT_WORKFLOW_ONTOLOGY,
+    DEFAULT_WORKFLOW_SHAPES,
+    load_fixed_turtle,
+)
 from business_analysis_agents.models import (
     OntologyValidationResult,
     ScenarioAgentOutput,
@@ -24,7 +29,6 @@ from business_analysis_agents.rdf_validation import (
 )
 
 
-DEFAULT_MAX_ONTOLOGY_ITERATIONS = 3
 DEFAULT_MAX_WORKFLOW_ITERATIONS = 3
 
 
@@ -84,50 +88,6 @@ def _require_text(value: str | None, field_name: str) -> str:
     return value
 
 
-def _run_ontology_setup(
-    scenario: ScenarioAgentOutput,
-    model: str,
-    runner: Callable[..., Any] | None,
-    max_iterations: int,
-) -> tuple[WorkflowAgentOutput, OntologyValidationResult]:
-    history: list[dict[str, Any]] = []
-    last_output: WorkflowAgentOutput | None = None
-    last_validation: OntologyValidationResult | None = None
-
-    for iteration in range(1, max_iterations + 1):
-        payload = {
-            "scenario_json": scenario.model_dump(mode="json"),
-            "iteration": iteration,
-            "previous_validation": _ontology_validation_payload(last_validation)
-            if last_validation
-            else None,
-        }
-        output = run_workflow_agent(
-            WorkflowAgentMode.ONTOLOGY_SETUP,
-            payload,
-            model=model,
-            runner=runner,
-        )
-        validation = validate_ontology_and_shapes(
-            _require_text(output.ontology_turtle, "ontology_turtle"),
-            _require_text(output.shacl_turtle, "shacl_turtle"),
-        )
-        history.append(
-            {
-                "iteration": iteration,
-                "output": _output_payload(output),
-                "validation": _ontology_validation_payload(validation),
-            }
-        )
-        last_output = output
-        last_validation = validation
-        if validation.conforms:
-            return output, validation
-
-    assert last_output is not None and last_validation is not None
-    return last_output, last_validation
-
-
 def _assert_fixed_hashes(
     ontology_turtle: str,
     shacl_turtle: str,
@@ -144,11 +104,10 @@ def run_workflow_pipeline(
     scenario_file: Path | str,
     model: str,
     output_dir: Path | str = "outputs/workflow",
-    max_ontology_iterations: int = DEFAULT_MAX_ONTOLOGY_ITERATIONS,
     max_workflow_iterations: int = DEFAULT_MAX_WORKFLOW_ITERATIONS,
     runner: Callable[..., Any] | None = None,
-    ontology_file: Path | str | None = None,
-    shapes_file: Path | str | None = None,
+    ontology_file: Path | str = DEFAULT_WORKFLOW_ONTOLOGY,
+    shapes_file: Path | str = DEFAULT_WORKFLOW_SHAPES,
 ) -> dict[str, Any]:
     """Run the Workflow RDF generation pipeline and save all artifacts."""
 
@@ -158,32 +117,30 @@ def run_workflow_pipeline(
     scenario = load_scenario_output(scenario_path)
     revision_history: list[dict[str, Any]] = []
 
-    if ontology_file and shapes_file:
-        ontology_turtle = Path(ontology_file).read_text(encoding="utf-8")
-        shacl_turtle = Path(shapes_file).read_text(encoding="utf-8")
-        ontology_output = WorkflowAgentOutput(
-            mode=WorkflowAgentMode.ONTOLOGY_SETUP,
-            ontology_turtle=ontology_turtle,
-            shacl_turtle=shacl_turtle,
-            ontology_version="reused",
+    ontology_path, ontology_turtle = load_fixed_turtle(
+        ontology_file, "Workflow ontology"
+    )
+    shapes_path, shacl_turtle = load_fixed_turtle(shapes_file, "Workflow SHACL")
+    ontology_validation = validate_ontology_and_shapes(ontology_turtle, shacl_turtle)
+    if not ontology_validation.conforms:
+        raise ValueError(
+            "Fixed Workflow ontology/SHACL validation failed: "
+            f"{_ontology_validation_payload(ontology_validation)}"
         )
-        ontology_validation = validate_ontology_and_shapes(ontology_turtle, shacl_turtle)
-    else:
-        ontology_output, ontology_validation = _run_ontology_setup(
-            scenario,
-            model=model,
-            runner=runner,
-            max_iterations=max_ontology_iterations,
-        )
-        ontology_turtle = _require_text(ontology_output.ontology_turtle, "ontology_turtle")
-        shacl_turtle = _require_text(ontology_output.shacl_turtle, "shacl_turtle")
 
     ontology_hash = content_hash(ontology_turtle)
     shapes_hash = content_hash(shacl_turtle)
 
     write_text(workflow_dir / "workflow_ontology_v0_1.ttl", ontology_turtle)
     write_text(workflow_dir / "workflow_shapes_v0_1.ttl", shacl_turtle)
-    write_json(workflow_dir / "workflow_ontology_design.json", _output_payload(ontology_output))
+    write_json(
+        workflow_dir / "workflow_ontology_design.json",
+        {
+            "source": "fixed_ttl",
+            "ontology_file": str(ontology_path),
+            "shapes_file": str(shapes_path),
+        },
+    )
     write_json(
         workflow_dir / "workflow_ontology_validation.json",
         _ontology_validation_payload(ontology_validation),
@@ -191,7 +148,8 @@ def run_workflow_pipeline(
     write_json(
         workflow_dir / "workflow_ontology_history.json",
         {
-            "fixed": ontology_validation.conforms,
+            "fixed": True,
+            "source": "fixed_ttl",
             "ontology_hash": ontology_hash,
             "shapes_hash": shapes_hash,
         },
@@ -203,7 +161,6 @@ def run_workflow_pipeline(
             "scenario_json": scenario.model_dump(mode="json"),
             "ontology_turtle": ontology_turtle,
             "shacl_turtle": shacl_turtle,
-            "namespace_uri": ontology_output.namespace_uri,
             "ontology_hash": ontology_hash,
             "shapes_hash": shapes_hash,
         },
@@ -273,11 +230,10 @@ def run_workflow_pipeline(
         "execution_datetime": datetime.now().isoformat(),
         "model": model,
         "agent_name": "workflow_agent",
-        "ontology_version": ontology_output.ontology_version,
-        "namespace_uri": ontology_output.namespace_uri,
+        "ontology_source_file": str(ontology_path),
+        "shapes_source_file": str(shapes_path),
         "ontology_hash": ontology_hash,
         "shapes_hash": shapes_hash,
-        "max_ontology_iterations": max_ontology_iterations,
         "max_workflow_iterations": max_workflow_iterations,
         "final_status": final_status,
     }

@@ -1,0 +1,28 @@
+@prefix data: <https://example.org/business-analysis/data#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+data:DataEntity a rdfs:Class ; rdfs:label "Data entity" .
+data:Document a rdfs:Class ; rdfs:label "Document" ; rdfs:subClassOf data:DataEntity .
+data:Form a rdfs:Class ; rdfs:label "Form" ; rdfs:subClassOf data:Document .
+data:Notification a rdfs:Class ; rdfs:label "Notification" ; rdfs:subClassOf data:Document .
+data:Result a rdfs:Class ; rdfs:label "Result" ; rdfs:subClassOf data:DataEntity .
+data:DataAttribute a rdfs:Class ; rdfs:label "Data attribute" .
+data:Actor a rdfs:Class ; rdfs:label "Actor" .
+data:Evidence a rdfs:Class ; rdfs:label "Evidence" .
+data:UnresolvedItem a rdfs:Class ; rdfs:label "Unresolved item" .
+
+data:name a rdf:Property ; rdfs:range xsd:string .
+data:description a rdf:Property ; rdfs:range xsd:string .
+data:hasAttribute a rdf:Property ; rdfs:domain data:DataEntity ; rdfs:range data:DataAttribute .
+data:relatedTo a rdf:Property ; rdfs:domain data:DataEntity ; rdfs:range data:DataEntity .
+data:usedBy a rdf:Property ; rdfs:domain data:DataEntity .
+data:generatedBy a rdf:Property ; rdfs:domain data:DataEntity .
+data:submittedBy a rdf:Property ; rdfs:domain data:DataEntity ; rdfs:range data:Actor .
+data:issuedBy a rdf:Property ; rdfs:domain data:DataEntity ; rdfs:range data:Actor .
+data:managedBy a rdf:Property ; rdfs:domain data:DataEntity ; rdfs:range data:Actor .
+data:hasEvidence a rdf:Property ; rdfs:range data:Evidence .
+data:sourcePage a rdf:Property ; rdfs:domain data:Evidence ; rdfs:range xsd:integer .
+data:evidenceText a rdf:Property ; rdfs:domain data:Evidence ; rdfs:range xsd:string .
+data:hasUnresolvedItem a rdf:Property ; rdfs:range data:UnresolvedItem .

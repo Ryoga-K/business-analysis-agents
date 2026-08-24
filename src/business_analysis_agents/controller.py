@@ -20,6 +20,14 @@ from business_analysis_agents.agents.workflow import (
 )
 from business_analysis_agents.config import create_run_dir, load_config_from_env
 from business_analysis_agents.data_rule_pipeline import run_data_rule_pipeline
+from business_analysis_agents.fixed_resources import (
+    DEFAULT_DATA_ONTOLOGY,
+    DEFAULT_DATA_SHAPES,
+    DEFAULT_RULE_ONTOLOGY,
+    DEFAULT_RULE_SHAPES,
+    DEFAULT_WORKFLOW_ONTOLOGY,
+    DEFAULT_WORKFLOW_SHAPES,
+)
 from business_analysis_agents.document_loader import load_pdf_document
 from business_analysis_agents.models import ScenarioAgentInput
 from business_analysis_agents.workflow_pipeline import run_workflow_pipeline
@@ -58,19 +66,13 @@ def build_workflow_parser() -> argparse.ArgumentParser:
     )
     workflow_parser.add_argument(
         "--ontology",
-        default=None,
-        help="Optional existing workflow ontology Turtle file.",
+        default=str(DEFAULT_WORKFLOW_ONTOLOGY),
+        help="Workflow ontology Turtle file.",
     )
     workflow_parser.add_argument(
         "--shapes",
-        default=None,
-        help="Optional existing workflow SHACL shapes Turtle file.",
-    )
-    workflow_parser.add_argument(
-        "--max-ontology-iterations",
-        type=int,
-        default=3,
-        help="Maximum ontology setup retries.",
+        default=str(DEFAULT_WORKFLOW_SHAPES),
+        help="Workflow SHACL shapes Turtle file.",
     )
     workflow_parser.add_argument(
         "--max-workflow-iterations",
@@ -99,10 +101,24 @@ def build_data_rule_parser() -> argparse.ArgumentParser:
         help="Directory for Data RDF and Rule RDF artifacts.",
     )
     parser.add_argument(
-        "--max-ontology-iterations",
-        type=int,
-        default=3,
-        help="Maximum ontology setup retries.",
+        "--data-ontology",
+        default=str(DEFAULT_DATA_ONTOLOGY),
+        help="Data ontology Turtle file.",
+    )
+    parser.add_argument(
+        "--rule-ontology",
+        default=str(DEFAULT_RULE_ONTOLOGY),
+        help="Rule ontology Turtle file.",
+    )
+    parser.add_argument(
+        "--data-shapes",
+        default=str(DEFAULT_DATA_SHAPES),
+        help="Data SHACL shapes Turtle file.",
+    )
+    parser.add_argument(
+        "--rule-shapes",
+        default=str(DEFAULT_RULE_SHAPES),
+        help="Rule SHACL shapes Turtle file.",
     )
     parser.add_argument(
         "--max-data-iterations",
@@ -133,7 +149,6 @@ def run(argv: Sequence[str] | None = None) -> int:
                 scenario_file=args.scenario,
                 model=config.openai_model,
                 output_dir=args.output_dir,
-                max_ontology_iterations=args.max_ontology_iterations,
                 max_workflow_iterations=args.max_workflow_iterations,
                 ontology_file=args.ontology,
                 shapes_file=args.shapes,
@@ -156,9 +171,12 @@ def run(argv: Sequence[str] | None = None) -> int:
                 scenario_file=args.scenario,
                 model=config.openai_model,
                 output_dir=args.output_dir,
-                max_ontology_iterations=args.max_ontology_iterations,
                 max_data_iterations=args.max_data_iterations,
                 max_rule_iterations=args.max_rule_iterations,
+                data_ontology_file=args.data_ontology,
+                rule_ontology_file=args.rule_ontology,
+                data_shapes_file=args.data_shapes,
+                rule_shapes_file=args.rule_shapes,
             )
         except DataRuleMissingOpenAIAPIKeyError as error:
             print(f"エラー: {error}")

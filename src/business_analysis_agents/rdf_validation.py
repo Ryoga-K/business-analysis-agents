@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass
 
 from pyshacl import validate as pyshacl_validate
-from rdflib import Graph, RDF, RDFS, SH, URIRef
+from rdflib import Graph, OWL, RDF, RDFS, SH, URIRef
 
 from business_analysis_agents.models import (
     OntologyValidationResult,
@@ -74,52 +74,57 @@ def _defined_terms(ontology_graph: Graph) -> set[str]:
     return terms
 
 
-def _ontology_namespace(ontology_graph: Graph) -> str | None:
-    for prefix, namespace in ontology_graph.namespaces():
-        if prefix not in {"rdf", "rdfs", "xsd", "sh", "prov"}:
-            return str(namespace)
-    return None
-
-
 def _is_standard_term(uri: str) -> bool:
     return any(uri.startswith(namespace) for namespace in STANDARD_NAMESPACES)
 
 
-def _is_instance_uri(uri: str, ontology_namespace: str | None) -> bool:
-    if ontology_namespace is None:
-        return False
-    return uri.startswith(ontology_namespace + "id/") or uri.startswith(
-        ontology_namespace + "instance/"
+def _declared_classes(ontology_graph: Graph) -> set[str]:
+    return {
+        str(subject)
+        for class_type in (RDFS.Class, OWL.Class)
+        for subject in ontology_graph.subjects(RDF.type, class_type)
+        if isinstance(subject, URIRef)
+    }
+
+
+def _declared_properties(ontology_graph: Graph) -> set[str]:
+    property_types = (
+        RDF.Property,
+        OWL.ObjectProperty,
+        OWL.DatatypeProperty,
+        OWL.AnnotationProperty,
     )
+    properties = {
+        str(subject)
+        for property_type in property_types
+        for subject in ontology_graph.subjects(RDF.type, property_type)
+        if isinstance(subject, URIRef)
+    }
+    for relation in (RDFS.domain, RDFS.range):
+        properties.update(
+            str(subject)
+            for subject in ontology_graph.subjects(relation, None)
+            if isinstance(subject, URIRef)
+        )
+    return properties
 
 
 def validate_vocabulary(workflow_graph: Graph, ontology_graph: Graph) -> VocabularyValidationResult:
-    """Check that Workflow RDF uses only fixed ontology or standard terms."""
+    """Check that RDF uses only classes and properties declared in the fixed ontology."""
 
-    defined_terms = _defined_terms(ontology_graph)
-    ontology_namespace = _ontology_namespace(ontology_graph)
+    declared_classes = _declared_classes(ontology_graph)
+    declared_properties = _declared_properties(ontology_graph)
     unauthorized: set[str] = set()
 
     for predicate in workflow_graph.predicates():
         uri = str(predicate)
-        if not _is_standard_term(uri) and uri not in defined_terms:
+        if predicate != RDF.type and uri not in declared_properties:
             unauthorized.add(uri)
 
     for rdf_type in workflow_graph.objects(None, RDF.type):
         if isinstance(rdf_type, URIRef):
             uri = str(rdf_type)
-            if not _is_standard_term(uri) and uri not in defined_terms:
-                unauthorized.add(uri)
-
-    for subject in workflow_graph.subjects():
-        if isinstance(subject, URIRef):
-            uri = str(subject)
-            if (
-                ontology_namespace
-                and uri.startswith(ontology_namespace)
-                and uri not in defined_terms
-                and not _is_instance_uri(uri, ontology_namespace)
-            ):
+            if uri not in declared_classes:
                 unauthorized.add(uri)
 
     terms = sorted(unauthorized)

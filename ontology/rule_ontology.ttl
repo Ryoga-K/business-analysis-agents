@@ -1,0 +1,27 @@
+@prefix rule: <https://example.org/business-analysis/rule#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+rule:BusinessRule a rdfs:Class ; rdfs:label "Business rule" .
+rule:DecisionRule a rdfs:Class ; rdfs:label "Decision rule" ; rdfs:subClassOf rule:BusinessRule .
+rule:EligibilityRule a rdfs:Class ; rdfs:label "Eligibility rule" ; rdfs:subClassOf rule:DecisionRule .
+rule:Condition a rdfs:Class ; rdfs:label "Condition" .
+rule:Criterion a rdfs:Class ; rdfs:label "Criterion" .
+rule:RuleOutcome a rdfs:Class ; rdfs:label "Rule outcome" .
+rule:Evidence a rdfs:Class ; rdfs:label "Evidence" .
+rule:UnresolvedItem a rdfs:Class ; rdfs:label "Unresolved item" .
+
+rule:name a rdf:Property ; rdfs:range xsd:string .
+rule:description a rdf:Property ; rdfs:range xsd:string .
+rule:hasCondition a rdf:Property ; rdfs:domain rule:BusinessRule ; rdfs:range rule:Condition .
+rule:usesData a rdf:Property ; rdfs:domain rule:BusinessRule .
+rule:producesResult a rdf:Property ; rdfs:domain rule:BusinessRule ; rdfs:range rule:RuleOutcome .
+rule:appliesTo a rdf:Property ; rdfs:domain rule:BusinessRule .
+rule:evaluatedBy a rdf:Property ; rdfs:domain rule:BusinessRule .
+rule:hasOutcome a rdf:Property ; rdfs:domain rule:BusinessRule ; rdfs:range rule:RuleOutcome .
+rule:dependsOnRule a rdf:Property ; rdfs:domain rule:BusinessRule ; rdfs:range rule:BusinessRule .
+rule:hasEvidence a rdf:Property ; rdfs:range rule:Evidence .
+rule:sourcePage a rdf:Property ; rdfs:domain rule:Evidence ; rdfs:range xsd:integer .
+rule:evidenceText a rdf:Property ; rdfs:domain rule:Evidence ; rdfs:range xsd:string .
+rule:hasUnresolvedItem a rdf:Property ; rdfs:range rule:UnresolvedItem .

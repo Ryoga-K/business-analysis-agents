@@ -8,6 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from business_analysis_agents.agents.data_rule import run_data_rule_agent
+from business_analysis_agents.fixed_resources import (
+    DEFAULT_DATA_ONTOLOGY,
+    DEFAULT_DATA_SHAPES,
+    DEFAULT_RULE_ONTOLOGY,
+    DEFAULT_RULE_SHAPES,
+    load_fixed_turtle,
+)
 from business_analysis_agents.models import (
     DataRuleAgentMode,
     DataRuleAgentOutput,
@@ -29,7 +36,6 @@ from business_analysis_agents.workflow_pipeline import (
 )
 
 
-DEFAULT_MAX_ONTOLOGY_ITERATIONS = 3
 DEFAULT_MAX_DATA_ITERATIONS = 3
 DEFAULT_MAX_RULE_ITERATIONS = 3
 
@@ -56,62 +62,20 @@ def _require_text(value: str | None, field_name: str) -> str:
     return value
 
 
-def _run_ontology_setup(
-    scenario: ScenarioAgentOutput,
-    model: str,
-    runner: Callable[..., Any] | None,
-    max_iterations: int,
-) -> tuple[DataRuleAgentOutput, OntologyValidationResult, OntologyValidationResult]:
-    last_output: DataRuleAgentOutput | None = None
-    last_data_validation: OntologyValidationResult | None = None
-    last_rule_validation: OntologyValidationResult | None = None
-
-    for iteration in range(1, max_iterations + 1):
-        payload = {
-            "scenario_json": scenario.model_dump(mode="json"),
-            "iteration": iteration,
-            "previous_data_validation": _ontology_validation_payload(last_data_validation)
-            if last_data_validation
-            else None,
-            "previous_rule_validation": _ontology_validation_payload(last_rule_validation)
-            if last_rule_validation
-            else None,
-        }
-        output = run_data_rule_agent(
-            DataRuleAgentMode.ONTOLOGY_SETUP,
-            payload,
-            model=model,
-            runner=runner,
-        )
-        ontology_turtle = _require_text(output.ontology_turtle, "ontology_turtle")
-        data_shapes = _require_text(output.data_shacl_turtle, "data_shacl_turtle")
-        rule_shapes = _require_text(output.rule_shacl_turtle, "rule_shacl_turtle")
-        data_validation = validate_ontology_and_shapes(ontology_turtle, data_shapes)
-        rule_validation = validate_ontology_and_shapes(ontology_turtle, rule_shapes)
-        last_output = output
-        last_data_validation = data_validation
-        last_rule_validation = rule_validation
-        if data_validation.conforms and rule_validation.conforms:
-            return output, data_validation, rule_validation
-
-    assert (
-        last_output is not None
-        and last_data_validation is not None
-        and last_rule_validation is not None
-    )
-    return last_output, last_data_validation, last_rule_validation
-
-
 def _assert_fixed_hashes(
-    ontology_turtle: str,
+    data_ontology: str,
+    rule_ontology: str,
     data_shapes: str,
     rule_shapes: str,
-    ontology_hash: str,
+    data_ontology_hash: str,
+    rule_ontology_hash: str,
     data_shapes_hash: str,
     rule_shapes_hash: str,
 ) -> None:
-    if content_hash(ontology_turtle) != ontology_hash:
-        raise ValueError("Ontology changed after setup. Revisions must not change it.")
+    if content_hash(data_ontology) != data_ontology_hash:
+        raise ValueError("Data ontology changed. Revisions must not change it.")
+    if content_hash(rule_ontology) != rule_ontology_hash:
+        raise ValueError("Rule ontology changed. Revisions must not change it.")
     if content_hash(data_shapes) != data_shapes_hash:
         raise ValueError("Data SHACL shapes changed after setup. Revisions must not change them.")
     if content_hash(rule_shapes) != rule_shapes_hash:
@@ -122,9 +86,11 @@ def _generate_and_revise_data(
     scenario: ScenarioAgentOutput,
     model: str,
     runner: Callable[..., Any] | None,
-    ontology_turtle: str,
+    data_ontology: str,
+    rule_ontology: str,
     data_shapes: str,
-    ontology_hash: str,
+    data_ontology_hash: str,
+    rule_ontology_hash: str,
     data_shapes_hash: str,
     rule_shapes_hash: str,
     rule_shapes: str,
@@ -135,9 +101,9 @@ def _generate_and_revise_data(
         DataRuleAgentMode.DATA_GENERATION,
         {
             "scenario_json": scenario.model_dump(mode="json"),
-            "ontology_turtle": ontology_turtle,
+            "ontology_turtle": data_ontology,
             "data_shacl_turtle": data_shapes,
-            "ontology_hash": ontology_hash,
+            "ontology_hash": data_ontology_hash,
             "data_shapes_hash": data_shapes_hash,
         },
         model=model,
@@ -147,7 +113,7 @@ def _generate_and_revise_data(
     initial_data_turtle = data_turtle
     validation = validate_rdf(
         data_turtle,
-        ontology_turtle,
+        data_ontology,
         data_shapes,
         rdf_kind=RdfKind.DATA,
         iteration=0,
@@ -158,10 +124,12 @@ def _generate_and_revise_data(
         if validation.conforms:
             break
         _assert_fixed_hashes(
-            ontology_turtle,
+            data_ontology,
+            rule_ontology,
             data_shapes,
             rule_shapes,
-            ontology_hash,
+            data_ontology_hash,
+            rule_ontology_hash,
             data_shapes_hash,
             rule_shapes_hash,
         )
@@ -169,13 +137,13 @@ def _generate_and_revise_data(
             DataRuleAgentMode.DATA_REVISION,
             {
                 "scenario_json": scenario.model_dump(mode="json"),
-                "ontology_turtle": ontology_turtle,
+                "ontology_turtle": data_ontology,
                 "data_shacl_turtle": data_shapes,
                 "previous_data_rdf": data_turtle,
                 "validation_feedback": validation_feedback(validation),
                 "previous_validation": _validation_payload(validation),
                 "revision_history": data_history,
-                "ontology_hash": ontology_hash,
+                "ontology_hash": data_ontology_hash,
                 "data_shapes_hash": data_shapes_hash,
             },
             model=model,
@@ -184,7 +152,7 @@ def _generate_and_revise_data(
         data_turtle = _require_text(output.data_rdf_turtle, "data_rdf_turtle")
         validation = validate_rdf(
             data_turtle,
-            ontology_turtle,
+            data_ontology,
             data_shapes,
             rdf_kind=RdfKind.DATA,
             iteration=iteration,
@@ -204,10 +172,12 @@ def _generate_and_revise_rule(
     scenario: ScenarioAgentOutput,
     model: str,
     runner: Callable[..., Any] | None,
-    ontology_turtle: str,
+    rule_ontology: str,
+    data_ontology: str,
     rule_shapes: str,
     data_turtle: str,
-    ontology_hash: str,
+    rule_ontology_hash: str,
+    data_ontology_hash: str,
     data_shapes_hash: str,
     rule_shapes_hash: str,
     data_shapes: str,
@@ -219,9 +189,9 @@ def _generate_and_revise_rule(
         {
             "scenario_json": scenario.model_dump(mode="json"),
             "validated_data_rdf": data_turtle,
-            "ontology_turtle": ontology_turtle,
+            "ontology_turtle": rule_ontology,
             "rule_shacl_turtle": rule_shapes,
-            "ontology_hash": ontology_hash,
+            "ontology_hash": rule_ontology_hash,
             "rule_shapes_hash": rule_shapes_hash,
         },
         model=model,
@@ -231,7 +201,7 @@ def _generate_and_revise_rule(
     initial_rule_turtle = rule_turtle
     validation = validate_rdf(
         rule_turtle,
-        ontology_turtle,
+        rule_ontology,
         rule_shapes,
         rdf_kind=RdfKind.RULE,
         additional_data_turtle=data_turtle,
@@ -243,10 +213,12 @@ def _generate_and_revise_rule(
         if validation.conforms:
             break
         _assert_fixed_hashes(
-            ontology_turtle,
+            data_ontology,
+            rule_ontology,
             data_shapes,
             rule_shapes,
-            ontology_hash,
+            data_ontology_hash,
+            rule_ontology_hash,
             data_shapes_hash,
             rule_shapes_hash,
         )
@@ -255,13 +227,13 @@ def _generate_and_revise_rule(
             {
                 "scenario_json": scenario.model_dump(mode="json"),
                 "validated_data_rdf": data_turtle,
-                "ontology_turtle": ontology_turtle,
+                "ontology_turtle": rule_ontology,
                 "rule_shacl_turtle": rule_shapes,
                 "previous_rule_rdf": rule_turtle,
                 "validation_feedback": validation_feedback(validation),
                 "previous_validation": _validation_payload(validation),
                 "revision_history": rule_history,
-                "ontology_hash": ontology_hash,
+                "ontology_hash": rule_ontology_hash,
                 "rule_shapes_hash": rule_shapes_hash,
             },
             model=model,
@@ -270,7 +242,7 @@ def _generate_and_revise_rule(
         rule_turtle = _require_text(output.rule_rdf_turtle, "rule_rdf_turtle")
         validation = validate_rdf(
             rule_turtle,
-            ontology_turtle,
+            rule_ontology,
             rule_shapes,
             rdf_kind=RdfKind.RULE,
             additional_data_turtle=data_turtle,
@@ -291,10 +263,13 @@ def run_data_rule_pipeline(
     scenario_file: Path | str,
     model: str,
     output_dir: Path | str = "outputs/data_rule",
-    max_ontology_iterations: int = DEFAULT_MAX_ONTOLOGY_ITERATIONS,
     max_data_iterations: int = DEFAULT_MAX_DATA_ITERATIONS,
     max_rule_iterations: int = DEFAULT_MAX_RULE_ITERATIONS,
     runner: Callable[..., Any] | None = None,
+    data_ontology_file: Path | str = DEFAULT_DATA_ONTOLOGY,
+    rule_ontology_file: Path | str = DEFAULT_RULE_ONTOLOGY,
+    data_shapes_file: Path | str = DEFAULT_DATA_SHAPES,
+    rule_shapes_file: Path | str = DEFAULT_RULE_SHAPES,
 ) -> dict[str, Any]:
     """Run Data RDF and Rule RDF generation from a scenario JSON file."""
 
@@ -303,23 +278,46 @@ def run_data_rule_pipeline(
     data_rule_dir.mkdir(parents=True, exist_ok=True)
     scenario = load_scenario_output(scenario_path)
 
-    ontology_output, data_ontology_validation, rule_ontology_validation = _run_ontology_setup(
-        scenario,
-        model=model,
-        runner=runner,
-        max_iterations=max_ontology_iterations,
+    data_ontology_path, data_ontology = load_fixed_turtle(
+        data_ontology_file, "Data ontology"
     )
-    ontology_turtle = _require_text(ontology_output.ontology_turtle, "ontology_turtle")
-    data_shapes = _require_text(ontology_output.data_shacl_turtle, "data_shacl_turtle")
-    rule_shapes = _require_text(ontology_output.rule_shacl_turtle, "rule_shacl_turtle")
-    ontology_hash = content_hash(ontology_turtle)
+    rule_ontology_path, rule_ontology = load_fixed_turtle(
+        rule_ontology_file, "Rule ontology"
+    )
+    data_shapes_path, data_shapes = load_fixed_turtle(data_shapes_file, "Data SHACL")
+    rule_shapes_path, rule_shapes = load_fixed_turtle(rule_shapes_file, "Rule SHACL")
+    data_ontology_validation = validate_ontology_and_shapes(data_ontology, data_shapes)
+    rule_ontology_validation = validate_ontology_and_shapes(rule_ontology, rule_shapes)
+    if not data_ontology_validation.conforms:
+        raise ValueError(
+            "Fixed Data ontology/SHACL validation failed: "
+            f"{_ontology_validation_payload(data_ontology_validation)}"
+        )
+    if not rule_ontology_validation.conforms:
+        raise ValueError(
+            "Fixed Rule ontology/SHACL validation failed: "
+            f"{_ontology_validation_payload(rule_ontology_validation)}"
+        )
+
+    data_ontology_hash = content_hash(data_ontology)
+    rule_ontology_hash = content_hash(rule_ontology)
     data_shapes_hash = content_hash(data_shapes)
     rule_shapes_hash = content_hash(rule_shapes)
 
-    write_text(data_rule_dir / "data_rule_ontology_v0_1.ttl", ontology_turtle)
+    write_text(data_rule_dir / "data_ontology_v0_1.ttl", data_ontology)
+    write_text(data_rule_dir / "rule_ontology_v0_1.ttl", rule_ontology)
     write_text(data_rule_dir / "data_shapes_v0_1.ttl", data_shapes)
     write_text(data_rule_dir / "rule_shapes_v0_1.ttl", rule_shapes)
-    write_json(data_rule_dir / "data_rule_ontology_design.json", _output_payload(ontology_output))
+    write_json(
+        data_rule_dir / "data_rule_ontology_design.json",
+        {
+            "source": "fixed_ttl",
+            "data_ontology_file": str(data_ontology_path),
+            "rule_ontology_file": str(rule_ontology_path),
+            "data_shapes_file": str(data_shapes_path),
+            "rule_shapes_file": str(rule_shapes_path),
+        },
+    )
     write_json(
         data_rule_dir / "data_ontology_validation.json",
         _ontology_validation_payload(data_ontology_validation),
@@ -331,8 +329,10 @@ def run_data_rule_pipeline(
     write_json(
         data_rule_dir / "data_rule_ontology_history.json",
         {
-            "fixed": data_ontology_validation.conforms and rule_ontology_validation.conforms,
-            "ontology_hash": ontology_hash,
+            "fixed": True,
+            "source": "fixed_ttl",
+            "data_ontology_hash": data_ontology_hash,
+            "rule_ontology_hash": rule_ontology_hash,
             "data_shapes_hash": data_shapes_hash,
             "rule_shapes_hash": rule_shapes_hash,
         },
@@ -342,9 +342,11 @@ def run_data_rule_pipeline(
         scenario,
         model=model,
         runner=runner,
-        ontology_turtle=ontology_turtle,
+        data_ontology=data_ontology,
+        rule_ontology=rule_ontology,
         data_shapes=data_shapes,
-        ontology_hash=ontology_hash,
+        data_ontology_hash=data_ontology_hash,
+        rule_ontology_hash=rule_ontology_hash,
         data_shapes_hash=data_shapes_hash,
         rule_shapes_hash=rule_shapes_hash,
         rule_shapes=rule_shapes,
@@ -354,10 +356,12 @@ def run_data_rule_pipeline(
         scenario,
         model=model,
         runner=runner,
-        ontology_turtle=ontology_turtle,
+        rule_ontology=rule_ontology,
+        data_ontology=data_ontology,
         rule_shapes=rule_shapes,
         data_turtle=data_turtle,
-        ontology_hash=ontology_hash,
+        rule_ontology_hash=rule_ontology_hash,
+        data_ontology_hash=data_ontology_hash,
         data_shapes_hash=data_shapes_hash,
         rule_shapes_hash=rule_shapes_hash,
         data_shapes=data_shapes,
@@ -388,12 +392,14 @@ def run_data_rule_pipeline(
         "execution_datetime": datetime.now().isoformat(),
         "model": model,
         "agent_name": "related_data_rule_agent",
-        "ontology_version": ontology_output.ontology_version,
-        "namespace_uri": ontology_output.namespace_uri,
-        "ontology_hash": ontology_hash,
+        "data_ontology_source_file": str(data_ontology_path),
+        "rule_ontology_source_file": str(rule_ontology_path),
+        "data_shapes_source_file": str(data_shapes_path),
+        "rule_shapes_source_file": str(rule_shapes_path),
+        "data_ontology_hash": data_ontology_hash,
+        "rule_ontology_hash": rule_ontology_hash,
         "data_shapes_hash": data_shapes_hash,
         "rule_shapes_hash": rule_shapes_hash,
-        "max_ontology_iterations": max_ontology_iterations,
         "max_data_iterations": max_data_iterations,
         "max_rule_iterations": max_rule_iterations,
         "final_status": final_status,

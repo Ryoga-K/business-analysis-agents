@@ -21,6 +21,10 @@ from business_analysis_agents.models import (
     WorkflowAgentMode,
     WorkflowAgentOutput,
 )
+from business_analysis_agents.fixed_resources import (
+    DEFAULT_WORKFLOW_ONTOLOGY,
+    DEFAULT_WORKFLOW_SHAPES,
+)
 from business_analysis_agents.rdf_validation import (
     content_hash,
     validate_ontology_and_shapes,
@@ -164,8 +168,8 @@ def _scenario() -> ScenarioAgentOutput:
     )
 
 
-def test_workflow_agent_is_single_agent_with_three_modes(monkeypatch) -> None:
-    """Only one Workflow Agent is defined and it is reused by all modes."""
+def test_workflow_agent_is_single_agent_with_two_modes(monkeypatch) -> None:
+    """Only one Workflow Agent is reused for generation and revision."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     calls: list[str] = []
@@ -174,15 +178,7 @@ def test_workflow_agent_is_single_agent_with_three_modes(monkeypatch) -> None:
         calls.append(prompt)
         assert agent.name == WORKFLOW_AGENT_NAME
         assert agent.output_type.output_type is WorkflowAgentOutput
-        if "ontology_setup" in prompt:
-            return SimpleNamespace(
-                final_output=WorkflowAgentOutput(
-                    mode=WorkflowAgentMode.ONTOLOGY_SETUP,
-                    ontology_turtle=ONTOLOGY_TTL,
-                    shacl_turtle=SHAPES_TTL,
-                )
-            )
-        elif "workflow_generation" in prompt:
+        if "workflow_generation" in prompt:
             return SimpleNamespace(
                 final_output=WorkflowAgentOutput(
                     mode=WorkflowAgentMode.WORKFLOW_GENERATION,
@@ -206,11 +202,11 @@ def test_workflow_agent_is_single_agent_with_three_modes(monkeypatch) -> None:
         assert output.mode == mode
 
     assert build_workflow_agent("gpt-test").name == WORKFLOW_AGENT_NAME
-    assert len(calls) == 3
+    assert len(calls) == 2
 
 
-def test_ontology_setup_output_can_be_validated() -> None:
-    """Generated ontology_turtle and shacl_turtle can be parsed and fixed."""
+def test_fixed_ontology_and_shapes_can_be_validated() -> None:
+    """Fixed ontology and SHACL Turtle can be parsed before agent execution."""
 
     validation = validate_ontology_and_shapes(ONTOLOGY_TTL, SHAPES_TTL)
 
@@ -219,27 +215,16 @@ def test_ontology_setup_output_can_be_validated() -> None:
     assert validation.shapes_hash == content_hash(SHAPES_TTL)
 
 
-def test_workflow_agent_output_accepts_nested_mapping() -> None:
-    """Ontology setup notes may include nested JSON mapping objects."""
+def test_default_bbo_ontology_and_shapes_are_consistent() -> None:
+    """The bundled BBO ontology and Workflow SHACL must use the same vocabulary."""
 
-    output = WorkflowAgentOutput(
-        mode=WorkflowAgentMode.ONTOLOGY_SETUP,
-        ontology_turtle=ONTOLOGY_TTL,
-        shacl_turtle=SHAPES_TTL,
-        class_property_mapping={
-            "Workflow": ["wf:scenarioId", "wf:hasActivity"],
-            "scenario_field_mapping": {
-                "scenario_id": "wf:scenarioId",
-                "procedure_steps": "wf:hasActivity",
-            },
-        },
+    validation = validate_ontology_and_shapes(
+        DEFAULT_WORKFLOW_ONTOLOGY.read_text(encoding="utf-8"),
+        DEFAULT_WORKFLOW_SHAPES.read_text(encoding="utf-8"),
     )
 
-    dumped = output.model_dump(mode="json")
-
-    assert dumped["class_property_mapping"]["scenario_field_mapping"]["scenario_id"] == (
-        "wf:scenarioId"
-    )
+    assert validation.conforms
+    assert validation.undefined_references == []
 
 
 def test_workflow_agent_output_keeps_explanatory_fields_flexible() -> None:
@@ -289,7 +274,6 @@ def test_workflow_agent_recovers_duplicate_key_output(monkeypatch) -> None:
 @pytest.mark.parametrize(
     ("mode", "expected_message"),
     [
-        (WorkflowAgentMode.ONTOLOGY_SETUP, "ontology_turtle"),
         (WorkflowAgentMode.WORKFLOW_GENERATION, "workflow_rdf_turtle"),
         (WorkflowAgentMode.WORKFLOW_REVISION, "workflow_rdf_turtle"),
     ],
@@ -344,6 +328,18 @@ def test_unauthorized_vocabulary_terms_are_detected() -> None:
     assert validation.vocabulary.unauthorized_term_count == 1
 
 
+def test_new_class_is_detected_even_in_an_instance_namespace() -> None:
+    """An AI-created class is not mistaken for a permitted business instance URI."""
+
+    workflow = VALID_WORKFLOW_TTL + "\ninst:new-item a inst:EligibilityCheckTask ."
+    validation = validate_workflow_rdf(workflow, ONTOLOGY_TTL, SHAPES_TTL)
+
+    assert not validation.conforms
+    assert "http://example.org/workflow#id/EligibilityCheckTask" in (
+        validation.vocabulary.unauthorized_terms
+    )
+
+
 def test_shacl_violations_are_detected() -> None:
     """pySHACL violations are exposed in Workflow RDF validation."""
 
@@ -354,24 +350,23 @@ def test_shacl_violations_are_detected() -> None:
     assert validation.shacl_result.violations
 
 
+def _write_fixed_files(tmp_path):
+    ontology_file = tmp_path / "workflow_ontology.ttl"
+    shapes_file = tmp_path / "workflow_shapes.ttl"
+    ontology_file.write_text(ONTOLOGY_TTL, encoding="utf-8")
+    shapes_file.write_text(SHAPES_TTL, encoding="utf-8")
+    return ontology_file, shapes_file
+
+
 def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     """Pipeline saves final artifacts and stops without revision when SHACL conforms."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    ontology_file, shapes_file = _write_fixed_files(tmp_path)
 
     def fake_runner(_agent, prompt):
-        if "ontology_setup" in prompt:
-            return SimpleNamespace(
-                final_output=WorkflowAgentOutput(
-                    mode=WorkflowAgentMode.ONTOLOGY_SETUP,
-                    ontology_turtle=ONTOLOGY_TTL,
-                    shacl_turtle=SHAPES_TTL,
-                    ontology_version="0.1",
-                    namespace_uri="http://example.org/workflow#",
-                )
-            )
         return SimpleNamespace(
             final_output=WorkflowAgentOutput(
                 mode=WorkflowAgentMode.WORKFLOW_GENERATION,
@@ -384,6 +379,8 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
         model="gpt-test",
         output_dir=tmp_path / "workflow",
         runner=fake_runner,
+        ontology_file=ontology_file,
+        shapes_file=shapes_file,
     )
 
     assert result["final_status"] == "completed"
@@ -397,20 +394,11 @@ def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> N
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    ontology_file, shapes_file = _write_fixed_files(tmp_path)
     revision_calls = 0
 
     def fake_runner(_agent, prompt):
         nonlocal revision_calls
-        if "ontology_setup" in prompt:
-            return SimpleNamespace(
-                final_output=WorkflowAgentOutput(
-                    mode=WorkflowAgentMode.ONTOLOGY_SETUP,
-                    ontology_turtle=ONTOLOGY_TTL,
-                    shacl_turtle=SHAPES_TTL,
-                    ontology_version="0.1",
-                    namespace_uri="http://example.org/workflow#",
-                )
-            )
         if "workflow_revision" in prompt:
             revision_calls += 1
             return SimpleNamespace(
@@ -433,6 +421,8 @@ def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> N
         output_dir=tmp_path / "workflow",
         max_workflow_iterations=2,
         runner=fake_runner,
+        ontology_file=ontology_file,
+        shapes_file=shapes_file,
     )
 
     assert result["final_status"] == "needs_review"
@@ -445,19 +435,10 @@ def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> N
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    ontology_file, shapes_file = _write_fixed_files(tmp_path)
     generated = "this is not turtle"
 
     def fake_runner(_agent, prompt):
-        if "ontology_setup" in prompt:
-            return SimpleNamespace(
-                final_output=WorkflowAgentOutput(
-                    mode=WorkflowAgentMode.ONTOLOGY_SETUP,
-                    ontology_turtle=ONTOLOGY_TTL,
-                    shacl_turtle=SHAPES_TTL,
-                    ontology_version="0.1",
-                    namespace_uri="http://example.org/workflow#",
-                )
-            )
         return SimpleNamespace(
             final_output=WorkflowAgentOutput(
                 mode=WorkflowAgentMode.WORKFLOW_GENERATION,
@@ -471,8 +452,32 @@ def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> N
         output_dir=tmp_path / "workflow",
         max_workflow_iterations=0,
         runner=fake_runner,
+        ontology_file=ontology_file,
+        shapes_file=shapes_file,
     )
 
     assert (tmp_path / "workflow" / "workflow_final.ttl").read_text(
         encoding="utf-8"
     ) == generated
+
+
+def test_pipeline_stops_when_fixed_ontology_is_missing(monkeypatch, tmp_path) -> None:
+    """A missing fixed TTL fails clearly without invoking the AI fallback."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    scenario_file = tmp_path / "scenario.json"
+    scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    _, shapes_file = _write_fixed_files(tmp_path)
+
+    def unexpected_runner(_agent, _prompt):
+        pytest.fail("Agent must not run when a fixed ontology file is missing")
+
+    with pytest.raises(FileNotFoundError, match="Required Workflow ontology"):
+        run_workflow_pipeline(
+            scenario_file,
+            model="gpt-test",
+            output_dir=tmp_path / "workflow",
+            runner=unexpected_runner,
+            ontology_file=tmp_path / "missing.ttl",
+            shapes_file=shapes_file,
+        )

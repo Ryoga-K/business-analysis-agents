@@ -1,0 +1,12 @@
+@prefix rule: <https://example.org/business-analysis/rule#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+rule:BusinessRuleShape a sh:NodeShape ;
+    sh:targetClass rule:BusinessRule ;
+    sh:property [ sh:path rule:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+
+rule:EvidenceShape a sh:NodeShape ;
+    sh:targetClass rule:Evidence ;
+    sh:property [ sh:path rule:sourcePage ; sh:minCount 1 ; sh:datatype xsd:integer ] ;
+    sh:property [ sh:path rule:evidenceText ; sh:minCount 1 ; sh:datatype xsd:string ] .

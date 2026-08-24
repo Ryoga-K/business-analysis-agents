@@ -9,11 +9,11 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - PyMuPDFによるPDFテキストのページ単位抽出
 - Scenario Agentによる固定フォーマットの業務シナリオJSON生成
 - Workflow AgentによるWorkflow RDF生成
-- Workflow用の暫定RDFS ontologyとSHACL Shapes生成
+- 固定Workflow ontology / SHACL Shapesを参照したWorkflow RDF生成
 - Workflow RDFのRDFLib構文検証、語彙検証、pySHACL検証
 - Workflow RDFの修正ループ
 - 関連データ・ルール抽出AgentによるData RDF / Rule RDF生成
-- Data/Rule用の暫定RDFS ontology、Data SHACL、Rule SHACL生成
+- 固定Data/Rule ontology、Data SHACL、Rule SHACLを参照したRDF生成
 - Data RDFの生成、検証、修正ループ
 - 検証済みData RDFを参照したRule RDFの生成、検証、修正ループ
 - 実行結果のJSON / Turtle保存
@@ -27,7 +27,8 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - Turtle本文はPydanticでは `str` として受け取り、内容の妥当性はRDFLibとpySHACLで検証する。
 - LLMが生成したWorkflow/Data/Rule RDFをPython側で機械的に補完しない。
 - シナリオJSONにない業務内容は推測せず、未確定事項として残す。
-- ontologyとSHACL Shapesは生成後に固定し、revisionではRDF本体だけを修正する。
+- ontologyとSHACL Shapesは事前定義TTLから読み込み、revisionではRDF本体だけを修正する。
+- ontology / SHACLが存在しない場合は停止し、LLM生成へフォールバックしない。
 - SQL、DB、Web UIは現時点では使用しない。
 
 ## ディレクトリ構成
@@ -38,6 +39,14 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 ├── pyproject.toml
 ├── .env.example
 ├── README.md
+├── ontology/
+│   ├── workflow_ontology.ttl
+│   ├── data_ontology.ttl
+│   └── rule_ontology.ttl
+├── shapes/
+│   ├── workflow_shapes.ttl
+│   ├── data_shapes.ttl
+│   └── rule_shapes.ttl
 ├── src/
 │   └── business_analysis_agents/
 │       ├── __main__.py
@@ -116,13 +125,13 @@ outputs/run_YYYYMMDD_HHMMSS/scenario.json
 python -m business_analysis_agents workflow --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json
 ```
 
-既存のWorkflow ontology / SHACL Shapesを再利用する場合:
+デフォルト以外のWorkflow ontology / SHACL Shapesを使用する場合:
 
 ```powershell
 python -m business_analysis_agents workflow `
   --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json `
-  --ontology outputs\workflow\workflow_ontology_v0_1.ttl `
-  --shapes outputs\workflow\workflow_shapes_v0_1.ttl
+  --ontology path\to\workflow_ontology.ttl `
+  --shapes path\to\workflow_shapes.ttl
 ```
 
 主な出力先:
@@ -150,6 +159,17 @@ outputs/workflow/
 python -m business_analysis_agents data-rule --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json
 ```
 
+デフォルト以外の固定TTLを使用する場合:
+
+```powershell
+python -m business_analysis_agents data-rule `
+  --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json `
+  --data-ontology path\to\data_ontology.ttl `
+  --rule-ontology path\to\rule_ontology.ttl `
+  --data-shapes path\to\data_shapes.ttl `
+  --rule-shapes path\to\rule_shapes.ttl
+```
+
 主な出力先:
 
 ```text
@@ -158,7 +178,8 @@ outputs/data_rule/
 
 主な出力ファイル:
 
-- `data_rule_ontology_v0_1.ttl`
+- `data_ontology_v0_1.ttl`
+- `rule_ontology_v0_1.ttl`
 - `data_shapes_v0_1.ttl`
 - `rule_shapes_v0_1.ttl`
 - `data_rule_ontology_design.json`
@@ -194,17 +215,15 @@ PDFから抽出したページ番号付きテキストを入力し、固定フ�
 
 ### Workflow Agent
 
-外部的には1つのAIエージェントです。内部モードで処理を分けます。
+外部的には1つのAIエージェントです。固定Ontology/SHACLを入力し、内部モードで処理を分けます。
 
-- `ontology_setup`: Workflow用の暫定RDFS ontologyとSHACL Shapesを生成
 - `workflow_generation`: シナリオJSONからWorkflow RDFを生成
 - `workflow_revision`: 検証結果に基づきWorkflow RDFだけを修正
 
 ### 関連データ・ルール抽出Agent
 
-外部的には1つのAIエージェントです。内部モードでData RDFとRule RDFを順番に処理します。
+外部的には1つのAIエージェントです。固定Ontology/SHACLを入力し、Data RDFとRule RDFを順番に処理します。
 
-- `ontology_setup`: Data/Rule用の暫定RDFS ontology、Data SHACL、Rule SHACLを生成
 - `data_generation`: シナリオJSONからData RDFを生成
 - `data_revision`: 検証結果に基づきData RDFだけを修正
 - `rule_generation`: 検証済みData RDFを参照してRule RDFを生成
@@ -216,7 +235,7 @@ RDFの検証はLLMではなくPython側で行います。
 
 - RDFLib: Turtle構文解析
 - RDFLib: ontology / SHACL Shapesの構文検証
-- RDFLib: 未定義語彙・許可外語彙の検出
+- RDFLib: 固定Ontologyで宣言されていないClass / Propertyの検出
 - pySHACL: SHACL制約検証
 - Python: 最大反復回数、終了条件、ontology / shapesのハッシュ固定確認
 
@@ -239,7 +258,7 @@ python -m pytest
 - 人間レビューUI
 - 人間への問い合わせ生成UI
 - DB保存
-- 本番用の固定ontology設計
+- BBO等を利用した本番用Workflow ontologyへの差し替え
 - PDF再読み込みによるData/Rule補完
 - Scenario Agent、Workflow Agentの大規模な再設計
 

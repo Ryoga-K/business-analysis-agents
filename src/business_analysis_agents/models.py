@@ -73,7 +73,6 @@ class RunStatus(str, Enum):
 class WorkflowAgentMode(str, Enum):
     """Workflow Agent internal processing mode."""
 
-    ONTOLOGY_SETUP = "ontology_setup"
     WORKFLOW_GENERATION = "workflow_generation"
     WORKFLOW_REVISION = "workflow_revision"
 
@@ -81,7 +80,6 @@ class WorkflowAgentMode(str, Enum):
 class DataRuleAgentMode(str, Enum):
     """Related data and rule extraction agent internal processing mode."""
 
-    ONTOLOGY_SETUP = "ontology_setup"
     DATA_GENERATION = "data_generation"
     DATA_REVISION = "data_revision"
     RULE_GENERATION = "rule_generation"
@@ -190,26 +188,14 @@ class WorkflowExtractionOutput(StrictBaseModel):
 
 
 class WorkflowAgentOutput(StrictBaseModel):
-    """Single structured output model used by all Workflow Agent modes.
+    """Structured output for Workflow RDF generation and revision.
 
-    The Turtle fields required by each mode are validated here. Explanatory
-    and design-oriented fields are intentionally flexible while the prototype
-    is still evolving; RDF syntax, vocabulary, and SHACL validity are checked
-    later by RDFLib and pySHACL.
+    The fixed ontology and SHACL are pipeline inputs and cannot be returned by
+    the agent. RDF syntax, vocabulary, and SHACL validity are checked later by
+    RDFLib and pySHACL.
     """
 
     mode: WorkflowAgentMode
-    ontology_turtle: str | None = None
-    shacl_turtle: str | None = None
-    reused_standard_terms: Any = Field(default_factory=list)
-    provisional_classes: Any = Field(default_factory=list)
-    provisional_properties: Any = Field(default_factory=list)
-    class_property_mapping: dict[str, Any] = Field(default_factory=dict)
-    ontology_design_notes: Any = Field(default_factory=list)
-    shacl_design_notes: Any = Field(default_factory=list)
-    unresolved_design_issues: Any = Field(default_factory=list)
-    ontology_version: str | None = None
-    namespace_uri: str | None = None
     workflow_rdf_turtle: str | None = None
     used_vocabulary_terms: Any = Field(default_factory=list)
     unresolved_items: Any = Field(default_factory=list)
@@ -221,29 +207,15 @@ class WorkflowAgentOutput(StrictBaseModel):
 
 
 class DataRuleAgentOutput(StrictBaseModel):
-    """Single structured output model used by related data/rule extraction modes.
+    """Structured output for Data/Rule RDF generation and revision.
 
-    Only the Turtle text required by each mode is strict. Explanatory fields are
-    flexible JSON so the prototype can absorb early LLM output variance while
-    RDFLib and pySHACL validate the actual RDF content.
+    Fixed ontologies and SHACL are pipeline inputs and cannot be returned by the
+    agent. RDFLib and pySHACL validate the actual RDF content.
     """
 
     mode: DataRuleAgentMode
-    ontology_turtle: str | None = None
-    data_shacl_turtle: str | None = None
-    rule_shacl_turtle: str | None = None
     data_rdf_turtle: str | None = None
     rule_rdf_turtle: str | None = None
-    reused_standard_terms: Any = Field(default_factory=list)
-    provisional_classes: Any = Field(default_factory=list)
-    provisional_properties: Any = Field(default_factory=list)
-    class_property_mapping: dict[str, Any] = Field(default_factory=dict)
-    ontology_design_notes: Any = Field(default_factory=list)
-    data_shacl_design_notes: Any = Field(default_factory=list)
-    rule_shacl_design_notes: Any = Field(default_factory=list)
-    unresolved_design_issues: Any = Field(default_factory=list)
-    ontology_version: str | None = None
-    namespace_uri: str | None = None
     used_vocabulary_terms: Any = Field(default_factory=list)
     unresolved_items: Any = Field(default_factory=list)
     generation_notes: Any = Field(default_factory=list)

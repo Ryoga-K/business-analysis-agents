@@ -172,8 +172,8 @@ def _scenario() -> ScenarioAgentOutput:
     )
 
 
-def test_data_rule_agent_is_single_agent_with_five_modes(monkeypatch) -> None:
-    """Only one related data/rule agent is defined and reused by all modes."""
+def test_data_rule_agent_is_single_agent_with_four_modes(monkeypatch) -> None:
+    """Only one related data/rule agent is reused by RDF generation and revision modes."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     calls: list[str] = []
@@ -182,15 +182,6 @@ def test_data_rule_agent_is_single_agent_with_five_modes(monkeypatch) -> None:
         calls.append(prompt)
         assert agent.name == DATA_RULE_AGENT_NAME
         assert agent.output_type.output_type is DataRuleAgentOutput
-        if "ontology_setup" in prompt:
-            return SimpleNamespace(
-                final_output=DataRuleAgentOutput(
-                    mode=DataRuleAgentMode.ONTOLOGY_SETUP,
-                    ontology_turtle=ONTOLOGY_TTL,
-                    data_shacl_turtle=DATA_SHAPES_TTL,
-                    rule_shacl_turtle=RULE_SHAPES_TTL,
-                )
-            )
         if "data_revision" in prompt:
             return SimpleNamespace(
                 final_output=DataRuleAgentOutput(
@@ -229,13 +220,12 @@ def test_data_rule_agent_is_single_agent_with_five_modes(monkeypatch) -> None:
         assert output.mode == mode
 
     assert build_data_rule_agent("gpt-test").name == DATA_RULE_AGENT_NAME
-    assert len(calls) == 5
+    assert len(calls) == 4
 
 
 @pytest.mark.parametrize(
     ("mode", "expected_message"),
     [
-        (DataRuleAgentMode.ONTOLOGY_SETUP, "ontology_turtle"),
         (DataRuleAgentMode.DATA_GENERATION, "data_rdf_turtle"),
         (DataRuleAgentMode.DATA_REVISION, "data_rdf_turtle"),
         (DataRuleAgentMode.RULE_GENERATION, "rule_rdf_turtle"),
@@ -336,27 +326,28 @@ def test_rule_rdf_validation_can_use_data_rdf_references() -> None:
     assert validation.conforms
 
 
+def _write_fixed_files(tmp_path):
+    data_ontology_file = tmp_path / "data_ontology.ttl"
+    rule_ontology_file = tmp_path / "rule_ontology.ttl"
+    data_shapes_file = tmp_path / "data_shapes.ttl"
+    rule_shapes_file = tmp_path / "rule_shapes.ttl"
+    data_ontology_file.write_text(ONTOLOGY_TTL, encoding="utf-8")
+    rule_ontology_file.write_text(ONTOLOGY_TTL, encoding="utf-8")
+    data_shapes_file.write_text(DATA_SHAPES_TTL, encoding="utf-8")
+    rule_shapes_file.write_text(RULE_SHAPES_TTL, encoding="utf-8")
+    return data_ontology_file, rule_ontology_file, data_shapes_file, rule_shapes_file
+
+
 def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_path) -> None:
     """Pipeline saves Data RDF, Rule RDF, validation, history, and metadata."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    fixed_files = _write_fixed_files(tmp_path)
     call_order: list[str] = []
 
     def fake_runner(_agent, prompt):
-        if "ontology_setup" in prompt:
-            call_order.append("ontology_setup")
-            return SimpleNamespace(
-                final_output=DataRuleAgentOutput(
-                    mode=DataRuleAgentMode.ONTOLOGY_SETUP,
-                    ontology_turtle=ONTOLOGY_TTL,
-                    data_shacl_turtle=DATA_SHAPES_TTL,
-                    rule_shacl_turtle=RULE_SHAPES_TTL,
-                    ontology_version="0.1",
-                    namespace_uri="http://example.org/data-rule#",
-                )
-            )
         if "data_generation" in prompt:
             call_order.append("data_generation")
             return SimpleNamespace(
@@ -379,11 +370,16 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
         model="gpt-test",
         output_dir=tmp_path / "data_rule",
         runner=fake_runner,
+        data_ontology_file=fixed_files[0],
+        rule_ontology_file=fixed_files[1],
+        data_shapes_file=fixed_files[2],
+        rule_shapes_file=fixed_files[3],
     )
 
-    assert call_order == ["ontology_setup", "data_generation", "rule_generation"]
+    assert call_order == ["data_generation", "rule_generation"]
     assert result["final_status"] == "completed"
-    assert (tmp_path / "data_rule" / "data_rule_ontology_v0_1.ttl").exists()
+    assert (tmp_path / "data_rule" / "data_ontology_v0_1.ttl").exists()
+    assert (tmp_path / "data_rule" / "rule_ontology_v0_1.ttl").exists()
     assert (tmp_path / "data_rule" / "data_shapes_v0_1.ttl").exists()
     assert (tmp_path / "data_rule" / "rule_shapes_v0_1.ttl").exists()
     assert (tmp_path / "data_rule" / "data_initial.ttl").exists()
@@ -401,22 +397,12 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    fixed_files = _write_fixed_files(tmp_path)
     data_revision_calls = 0
     rule_revision_calls = 0
 
     def fake_runner(_agent, prompt):
         nonlocal data_revision_calls, rule_revision_calls
-        if "ontology_setup" in prompt:
-            return SimpleNamespace(
-                final_output=DataRuleAgentOutput(
-                    mode=DataRuleAgentMode.ONTOLOGY_SETUP,
-                    ontology_turtle=ONTOLOGY_TTL,
-                    data_shacl_turtle=DATA_SHAPES_TTL,
-                    rule_shacl_turtle=RULE_SHAPES_TTL,
-                    ontology_version="0.1",
-                    namespace_uri="http://example.org/data-rule#",
-                )
-            )
         if "data_revision" in prompt:
             data_revision_calls += 1
             return SimpleNamespace(
@@ -454,6 +440,10 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
         max_data_iterations=2,
         max_rule_iterations=2,
         runner=fake_runner,
+        data_ontology_file=fixed_files[0],
+        rule_ontology_file=fixed_files[1],
+        data_shapes_file=fixed_files[2],
+        rule_shapes_file=fixed_files[3],
     )
 
     assert result["final_status"] == "completed"
