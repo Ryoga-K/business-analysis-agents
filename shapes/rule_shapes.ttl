@@ -1,12 +1,23 @@
-@prefix rule: <https://example.org/business-analysis/rule#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix schema: <https://schema.org/> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rsh: <http://example.org/shapes/rule#> .
 
-rule:BusinessRuleShape a sh:NodeShape ;
-    sh:targetClass rule:BusinessRule ;
-    sh:property [ sh:path rule:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+rsh:RuleActivityShape a sh:NodeShape ;
+    sh:targetClass prov:Activity ;
+    sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path schema:description ; sh:minCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path prov:used ; sh:minCount 1 ; sh:class prov:Entity ] ;
+    sh:property [ sh:path prov:wasAssociatedWith ; sh:class prov:Agent ] .
 
-rule:EvidenceShape a sh:NodeShape ;
-    sh:targetClass rule:Evidence ;
-    sh:property [ sh:path rule:sourcePage ; sh:minCount 1 ; sh:datatype xsd:integer ] ;
-    sh:property [ sh:path rule:evidenceText ; sh:minCount 1 ; sh:datatype xsd:string ] .
+rsh:RuleEntityShape a sh:NodeShape ;
+    sh:targetClass prov:Entity ;
+    sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path schema:description ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path prov:wasGeneratedBy ; sh:class prov:Activity ] ;
+    sh:property [ sh:path prov:wasDerivedFrom ; sh:class prov:Entity ] .
+
+rsh:RuleAgentShape a sh:NodeShape ;
+    sh:targetClass prov:Agent ;
+    sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:datatype xsd:string ] .

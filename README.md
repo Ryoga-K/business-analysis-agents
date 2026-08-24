@@ -140,18 +140,19 @@ python -m business_analysis_agents workflow `
 outputs/workflow/
 ```
 
-主な出力ファイル:
+通常実行時の出力ファイル:
 
-- `workflow_ontology_v0_1.ttl`
-- `workflow_shapes_v0_1.ttl`
-- `workflow_ontology_design.json`
-- `workflow_ontology_validation.json`
-- `workflow_ontology_history.json`
 - `workflow_final.ttl`
-- `workflow_agent_output.json`
 - `workflow_validation.json`
 - `workflow_revision_history.json`
-- `workflow_run_metadata.json`
+
+固定Ontology/SHACLの検証結果やAgent出力などの詳細ファイルも保存する場合:
+
+```powershell
+python -m business_analysis_agents workflow `
+  --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json `
+  --save-debug-outputs
+```
 
 ### 4. シナリオJSONからData RDF / Rule RDFを生成
 
@@ -178,25 +179,12 @@ outputs/data_rule/
 
 主な出力ファイル:
 
-- `data_ontology_v0_1.ttl`
-- `rule_ontology_v0_1.ttl`
-- `data_shapes_v0_1.ttl`
-- `rule_shapes_v0_1.ttl`
-- `data_rule_ontology_design.json`
-- `data_ontology_validation.json`
-- `rule_ontology_validation.json`
-- `data_rule_ontology_history.json`
-- `data_initial.ttl`
 - `data_final.ttl`
-- `rule_initial.ttl`
-- `rule_final.ttl`
-- `data_agent_output.json`
-- `rule_agent_output.json`
 - `data_validation.json`
-- `rule_validation.json`
 - `data_revision_history.json`
+- `rule_final.ttl`
+- `rule_validation.json`
 - `rule_revision_history.json`
-- `data_rule_run_metadata.json`
 
 ## エージェント構成
 
@@ -248,7 +236,7 @@ python -m pytest
 直近の確認結果:
 
 ```text
-38 passed
+42 passed
 ```
 
 ## 未実装

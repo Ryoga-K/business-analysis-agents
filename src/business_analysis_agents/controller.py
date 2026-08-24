@@ -80,6 +80,11 @@ def build_workflow_parser() -> argparse.ArgumentParser:
         default=3,
         help="Maximum Workflow RDF revision retries.",
     )
+    workflow_parser.add_argument(
+        "--save-debug-outputs",
+        action="store_true",
+        help="Save ontology, SHACL, agent output, and run metadata artifacts.",
+    )
     return workflow_parser
 
 
@@ -152,6 +157,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 max_workflow_iterations=args.max_workflow_iterations,
                 ontology_file=args.ontology,
                 shapes_file=args.shapes,
+                save_debug_outputs=args.save_debug_outputs,
             )
         except WorkflowMissingOpenAIAPIKeyError as error:
             print(f"エラー: {error}")

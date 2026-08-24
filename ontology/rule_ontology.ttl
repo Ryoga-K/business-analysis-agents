@@ -1,27 +1,127 @@
-@prefix rule: <https://example.org/business-analysis/rule#> .
-@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
-@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix prov:   <http://www.w3.org/ns/prov#> .
+@prefix schema: <https://schema.org/> .
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:    <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
 
-rule:BusinessRule a rdfs:Class ; rdfs:label "Business rule" .
-rule:DecisionRule a rdfs:Class ; rdfs:label "Decision rule" ; rdfs:subClassOf rule:BusinessRule .
-rule:EligibilityRule a rdfs:Class ; rdfs:label "Eligibility rule" ; rdfs:subClassOf rule:DecisionRule .
-rule:Condition a rdfs:Class ; rdfs:label "Condition" .
-rule:Criterion a rdfs:Class ; rdfs:label "Criterion" .
-rule:RuleOutcome a rdfs:Class ; rdfs:label "Rule outcome" .
-rule:Evidence a rdfs:Class ; rdfs:label "Evidence" .
-rule:UnresolvedItem a rdfs:Class ; rdfs:label "Unresolved item" .
 
-rule:name a rdf:Property ; rdfs:range xsd:string .
-rule:description a rdf:Property ; rdfs:range xsd:string .
-rule:hasCondition a rdf:Property ; rdfs:domain rule:BusinessRule ; rdfs:range rule:Condition .
-rule:usesData a rdf:Property ; rdfs:domain rule:BusinessRule .
-rule:producesResult a rdf:Property ; rdfs:domain rule:BusinessRule ; rdfs:range rule:RuleOutcome .
-rule:appliesTo a rdf:Property ; rdfs:domain rule:BusinessRule .
-rule:evaluatedBy a rdf:Property ; rdfs:domain rule:BusinessRule .
-rule:hasOutcome a rdf:Property ; rdfs:domain rule:BusinessRule ; rdfs:range rule:RuleOutcome .
-rule:dependsOnRule a rdf:Property ; rdfs:domain rule:BusinessRule ; rdfs:range rule:BusinessRule .
-rule:hasEvidence a rdf:Property ; rdfs:range rule:Evidence .
-rule:sourcePage a rdf:Property ; rdfs:domain rule:Evidence ; rdfs:range xsd:integer .
-rule:evidenceText a rdf:Property ; rdfs:domain rule:Evidence ; rdfs:range xsd:string .
-rule:hasUnresolvedItem a rdf:Property ; rdfs:range rule:UnresolvedItem .
+#################################################################
+# Ontology
+#################################################################
+
+<http://example.org/ontology/rule>
+    a owl:Ontology ;
+    rdfs:label "Rule RDF Vocabulary Subset"@en ;
+    rdfs:seeAlso <http://www.w3.org/ns/prov#> ,
+                 <https://schema.org/> .
+
+
+#################################################################
+# PROV-O Classes
+#################################################################
+
+prov:Activity
+    a owl:Class ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:label "Activity" ;
+    owl:disjointWith prov:Entity ;
+    prov:definition
+        "An activity is something that occurs over a period of time and acts upon or with entities; it may include consuming, processing, transforming, modifying, relocating, using, or generating entities." .
+
+prov:Entity
+    a owl:Class ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:label "Entity" ;
+    prov:definition
+        "An entity is a physical, digital, conceptual, or other kind of thing with some fixed aspects; entities may be real or imaginary. "@en .
+
+prov:Agent
+    a owl:Class ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:label "Agent" ;
+    prov:definition
+        "An agent is something that bears some form of responsibility for an activity taking place, for the existence of an entity, or for another agent's activity. "@en .
+
+
+#################################################################
+# PROV-O Properties
+#################################################################
+
+prov:used
+    a owl:ObjectProperty ;
+    rdfs:comment
+        "A prov:Entity that was used by this prov:Activity. For example, :baking prov:used :spoon, :egg, :oven ."@en ;
+    rdfs:domain prov:Activity ;
+    rdfs:range prov:Entity ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:label "used" .
+
+prov:wasGeneratedBy
+    a owl:ObjectProperty ;
+    rdfs:domain prov:Entity ;
+    rdfs:range prov:Activity ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:label "wasGeneratedBy" .
+
+prov:wasDerivedFrom
+    a owl:ObjectProperty ;
+    rdfs:comment
+        "The more specific subproperties of prov:wasDerivedFrom (i.e., prov:wasQuotedFrom, prov:wasRevisionOf, prov:hadPrimarySource) should be used when applicable."@en ;
+    rdfs:domain prov:Entity ;
+    rdfs:range prov:Entity ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:label "wasDerivedFrom" ;
+    prov:definition
+        "A derivation is a transformation of an entity into another, an update of an entity resulting in a new one, or the construction of a new entity based on a pre-existing entity."@en .
+
+prov:wasAssociatedWith
+    a owl:ObjectProperty ;
+    rdfs:comment
+        "An prov:Agent that had some (unspecified) responsibility for the occurrence of this prov:Activity."@en ;
+    rdfs:domain prov:Activity ;
+    rdfs:range prov:Agent ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:label "wasAssociatedWith" .
+
+prov:value
+    a owl:DatatypeProperty ;
+    rdfs:domain prov:Entity ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:label "value" ;
+    prov:definition
+        "Provides a value that is a direct representation of an entity."@en .
+
+
+#################################################################
+# schema.org Properties
+#################################################################
+
+schema:name
+    a rdf:Property ;
+    rdfs:label "name" ;
+    rdfs:comment "The name of the item." ;
+    schema:domainIncludes schema:Thing ;
+    schema:rangeIncludes schema:Text .
+
+schema:description
+    a rdf:Property ;
+    rdfs:label "description" ;
+    rdfs:comment "A description of the item." ;
+    schema:domainIncludes schema:Thing ;
+    schema:rangeIncludes schema:Text .
+
+
+#################################################################
+# schema.org Supporting Classes
+#################################################################
+
+schema:Thing
+    a rdfs:Class ;
+    rdfs:label "Thing" ;
+    rdfs:comment "The most generic type of item." .
+
+schema:Text
+    a rdfs:Class ;
+    rdfs:label "Text" ;
+    rdfs:comment "Data type: Text." .

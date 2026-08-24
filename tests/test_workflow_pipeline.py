@@ -365,6 +365,9 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
     ontology_file, shapes_file = _write_fixed_files(tmp_path)
+    workflow_dir = tmp_path / "workflow"
+    workflow_dir.mkdir()
+    (workflow_dir / "workflow_run_metadata.json").write_text("stale", encoding="utf-8")
 
     def fake_runner(_agent, prompt):
         return SimpleNamespace(
@@ -377,15 +380,24 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     result = run_workflow_pipeline(
         scenario_file,
         model="gpt-test",
-        output_dir=tmp_path / "workflow",
+        output_dir=workflow_dir,
         runner=fake_runner,
         ontology_file=ontology_file,
         shapes_file=shapes_file,
     )
 
     assert result["final_status"] == "completed"
-    assert (tmp_path / "workflow" / "workflow_final.ttl").exists()
-    assert (tmp_path / "workflow" / "workflow_run_metadata.json").exists()
+    assert {path.name for path in workflow_dir.iterdir()} == {
+        "workflow_final.ttl",
+        "workflow_validation.json",
+        "workflow_revision_history.json",
+    }
+    assert json.loads(
+        (workflow_dir / "workflow_validation.json").read_text(encoding="utf-8")
+    )["conforms"]
+    assert json.loads(
+        (workflow_dir / "workflow_revision_history.json").read_text(encoding="utf-8")
+    ) == []
 
 
 def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> None:
@@ -427,6 +439,52 @@ def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> N
 
     assert result["final_status"] == "needs_review"
     assert revision_calls == 2
+    workflow_dir = tmp_path / "workflow"
+    history = json.loads(
+        (workflow_dir / "workflow_revision_history.json").read_text(encoding="utf-8")
+    )
+    assert [entry["iteration"] for entry in history] == [1, 2]
+    assert all("output" in entry and "validation" in entry for entry in history)
+    assert (workflow_dir / "workflow_final.ttl").read_text(
+        encoding="utf-8"
+    ) == INVALID_WORKFLOW_TTL
+    assert not json.loads(
+        (workflow_dir / "workflow_validation.json").read_text(encoding="utf-8")
+    )["conforms"]
+
+
+def test_pipeline_saves_detailed_artifacts_in_debug_mode(monkeypatch, tmp_path) -> None:
+    """Debug mode preserves the detailed artifacts omitted from normal runs."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    scenario_file = tmp_path / "scenario.json"
+    scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    ontology_file, shapes_file = _write_fixed_files(tmp_path)
+
+    def fake_runner(_agent, _prompt):
+        return SimpleNamespace(
+            final_output=WorkflowAgentOutput(
+                mode=WorkflowAgentMode.WORKFLOW_GENERATION,
+                workflow_rdf_turtle=VALID_WORKFLOW_TTL,
+            )
+        )
+
+    run_workflow_pipeline(
+        scenario_file,
+        model="gpt-test",
+        output_dir=tmp_path / "workflow",
+        runner=fake_runner,
+        ontology_file=ontology_file,
+        shapes_file=shapes_file,
+        save_debug_outputs=True,
+    )
+
+    workflow_dir = tmp_path / "workflow"
+    assert (workflow_dir / "workflow_agent_output.json").exists()
+    assert (workflow_dir / "workflow_run_metadata.json").exists()
+    assert (workflow_dir / "workflow_ontology_history.json").exists()
+    assert (workflow_dir / "workflow_ontology_v0_1.ttl").exists()
+    assert (workflow_dir / "workflow_shapes_v0_1.ttl").exists()
 
 
 def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> None:

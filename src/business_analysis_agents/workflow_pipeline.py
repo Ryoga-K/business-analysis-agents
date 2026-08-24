@@ -30,6 +30,15 @@ from business_analysis_agents.rdf_validation import (
 
 
 DEFAULT_MAX_WORKFLOW_ITERATIONS = 3
+DEBUG_OUTPUT_FILENAMES = (
+    "workflow_ontology_v0_1.ttl",
+    "workflow_shapes_v0_1.ttl",
+    "workflow_ontology_design.json",
+    "workflow_ontology_validation.json",
+    "workflow_ontology_history.json",
+    "workflow_agent_output.json",
+    "workflow_run_metadata.json",
+)
 
 
 def load_scenario_output(path: Path | str) -> ScenarioAgentOutput:
@@ -100,6 +109,13 @@ def _assert_fixed_hashes(
         raise ValueError("SHACL shapes changed after setup. Workflow revision must not change them.")
 
 
+def _remove_debug_outputs(workflow_dir: Path) -> None:
+    """Remove stale debug artifacts from a completed normal run."""
+
+    for filename in DEBUG_OUTPUT_FILENAMES:
+        (workflow_dir / filename).unlink(missing_ok=True)
+
+
 def run_workflow_pipeline(
     scenario_file: Path | str,
     model: str,
@@ -108,8 +124,9 @@ def run_workflow_pipeline(
     runner: Callable[..., Any] | None = None,
     ontology_file: Path | str = DEFAULT_WORKFLOW_ONTOLOGY,
     shapes_file: Path | str = DEFAULT_WORKFLOW_SHAPES,
+    save_debug_outputs: bool = False,
 ) -> dict[str, Any]:
-    """Run the Workflow RDF generation pipeline and save all artifacts."""
+    """Run Workflow RDF generation and save final artifacts."""
 
     scenario_path = Path(scenario_file)
     workflow_dir = Path(output_dir)
@@ -131,29 +148,30 @@ def run_workflow_pipeline(
     ontology_hash = content_hash(ontology_turtle)
     shapes_hash = content_hash(shacl_turtle)
 
-    write_text(workflow_dir / "workflow_ontology_v0_1.ttl", ontology_turtle)
-    write_text(workflow_dir / "workflow_shapes_v0_1.ttl", shacl_turtle)
-    write_json(
-        workflow_dir / "workflow_ontology_design.json",
-        {
-            "source": "fixed_ttl",
-            "ontology_file": str(ontology_path),
-            "shapes_file": str(shapes_path),
-        },
-    )
-    write_json(
-        workflow_dir / "workflow_ontology_validation.json",
-        _ontology_validation_payload(ontology_validation),
-    )
-    write_json(
-        workflow_dir / "workflow_ontology_history.json",
-        {
-            "fixed": True,
-            "source": "fixed_ttl",
-            "ontology_hash": ontology_hash,
-            "shapes_hash": shapes_hash,
-        },
-    )
+    if save_debug_outputs:
+        write_text(workflow_dir / "workflow_ontology_v0_1.ttl", ontology_turtle)
+        write_text(workflow_dir / "workflow_shapes_v0_1.ttl", shacl_turtle)
+        write_json(
+            workflow_dir / "workflow_ontology_design.json",
+            {
+                "source": "fixed_ttl",
+                "ontology_file": str(ontology_path),
+                "shapes_file": str(shapes_path),
+            },
+        )
+        write_json(
+            workflow_dir / "workflow_ontology_validation.json",
+            _ontology_validation_payload(ontology_validation),
+        )
+        write_json(
+            workflow_dir / "workflow_ontology_history.json",
+            {
+                "fixed": True,
+                "source": "fixed_ttl",
+                "ontology_hash": ontology_hash,
+                "shapes_hash": shapes_hash,
+            },
+        )
 
     generation_output = run_workflow_agent(
         WorkflowAgentMode.WORKFLOW_GENERATION,
@@ -220,8 +238,9 @@ def run_workflow_pipeline(
         )
 
     final_status = "completed" if validation.conforms else "needs_review"
+    if not save_debug_outputs:
+        _remove_debug_outputs(workflow_dir)
     write_text(workflow_dir / "workflow_final.ttl", workflow_turtle)
-    write_json(workflow_dir / "workflow_agent_output.json", _output_payload(final_output))
     write_json(workflow_dir / "workflow_validation.json", _validation_payload(validation))
     write_json(workflow_dir / "workflow_revision_history.json", revision_history)
 
@@ -237,7 +256,12 @@ def run_workflow_pipeline(
         "max_workflow_iterations": max_workflow_iterations,
         "final_status": final_status,
     }
-    write_json(workflow_dir / "workflow_run_metadata.json", metadata)
+    if save_debug_outputs:
+        write_json(
+            workflow_dir / "workflow_agent_output.json",
+            _output_payload(final_output),
+        )
+        write_json(workflow_dir / "workflow_run_metadata.json", metadata)
 
     return {
         "output_dir": str(workflow_dir),

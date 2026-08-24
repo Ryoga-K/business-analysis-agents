@@ -1,28 +1,238 @@
-@prefix data: <https://example.org/business-analysis/data#> .
-@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
-@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix schema: <https://schema.org/> .
+@prefix skos:   <http://www.w3.org/2004/02/skos/core#> .
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:    <http://www.w3.org/2002/07/owl#> .
 
-data:DataEntity a rdfs:Class ; rdfs:label "Data entity" .
-data:Document a rdfs:Class ; rdfs:label "Document" ; rdfs:subClassOf data:DataEntity .
-data:Form a rdfs:Class ; rdfs:label "Form" ; rdfs:subClassOf data:Document .
-data:Notification a rdfs:Class ; rdfs:label "Notification" ; rdfs:subClassOf data:Document .
-data:Result a rdfs:Class ; rdfs:label "Result" ; rdfs:subClassOf data:DataEntity .
-data:DataAttribute a rdfs:Class ; rdfs:label "Data attribute" .
-data:Actor a rdfs:Class ; rdfs:label "Actor" .
-data:Evidence a rdfs:Class ; rdfs:label "Evidence" .
-data:UnresolvedItem a rdfs:Class ; rdfs:label "Unresolved item" .
 
-data:name a rdf:Property ; rdfs:range xsd:string .
-data:description a rdf:Property ; rdfs:range xsd:string .
-data:hasAttribute a rdf:Property ; rdfs:domain data:DataEntity ; rdfs:range data:DataAttribute .
-data:relatedTo a rdf:Property ; rdfs:domain data:DataEntity ; rdfs:range data:DataEntity .
-data:usedBy a rdf:Property ; rdfs:domain data:DataEntity .
-data:generatedBy a rdf:Property ; rdfs:domain data:DataEntity .
-data:submittedBy a rdf:Property ; rdfs:domain data:DataEntity ; rdfs:range data:Actor .
-data:issuedBy a rdf:Property ; rdfs:domain data:DataEntity ; rdfs:range data:Actor .
-data:managedBy a rdf:Property ; rdfs:domain data:DataEntity ; rdfs:range data:Actor .
-data:hasEvidence a rdf:Property ; rdfs:range data:Evidence .
-data:sourcePage a rdf:Property ; rdfs:domain data:Evidence ; rdfs:range xsd:integer .
-data:evidenceText a rdf:Property ; rdfs:domain data:Evidence ; rdfs:range xsd:string .
-data:hasUnresolvedItem a rdf:Property ; rdfs:range data:UnresolvedItem .
+#################################################################
+# schema.org Classes
+#################################################################
+
+schema:Person
+    a rdfs:Class ;
+    rdfs:label "Person" ;
+    rdfs:comment "A person (alive, dead, undead, or fictional)." ;
+    rdfs:subClassOf schema:Thing .
+
+schema:Organization
+    a rdfs:Class ;
+    rdfs:label "Organization" ;
+    rdfs:comment "An organization such as a school, NGO, corporation, club, etc." ;
+    rdfs:subClassOf schema:Thing .
+
+schema:PostalAddress
+    a rdfs:Class ;
+    rdfs:label "PostalAddress" ;
+    rdfs:comment "The mailing address." ;
+    rdfs:subClassOf schema:ContactPoint .
+
+schema:DigitalDocument
+    a rdfs:Class ;
+    rdfs:label "DigitalDocument" ;
+    rdfs:subClassOf schema:CreativeWork .
+
+schema:MonetaryAmount
+    a rdfs:Class ;
+    rdfs:label "MonetaryAmount" ;
+    rdfs:comment "A monetary value or range. This type can be used to describe an amount of money such as $50 USD, or a range as in describing a bank account being suitable for a balance between £1,000 and £1,000,000 GBP, or the value of a salary, etc. It is recommended to use PriceSpecification Types to describe the price of an Offer, Invoice, etc." ;
+    rdfs:subClassOf schema:StructuredValue .
+
+schema:PropertyValue
+    a rdfs:Class ;
+    rdfs:label "PropertyValue" ;
+    rdfs:comment "A property-value pair, e.g. representing a feature of a product or place. Use the 'name' property for the name of the property. If there is an additional human-readable version of the value, put that into the 'description' property. Always use specific schema.org properties when a) they exist and b) you can populate them. Using PropertyValue as a substitute will typically not trigger the same effect as using the original, specific property." ;
+    rdfs:subClassOf schema:StructuredValue .
+
+
+#################################################################
+# schema.org Properties
+#################################################################
+
+schema:name
+    a rdf:Property ;
+    rdfs:label "name" ;
+    rdfs:comment "The name of the item." ;
+    schema:domainIncludes schema:Thing ;
+    schema:rangeIncludes schema:Text .
+
+schema:identifier
+    a rdf:Property ;
+    rdfs:label "identifier" ;
+    rdfs:comment "The identifier property represents any kind of identifier for any kind of Thing, such as ISBNs, GTIN codes, UUIDs etc. Schema.org provides dedicated properties for representing many of these, either as textual strings or as URL (URI) links. See background notes for more details." ;
+    schema:domainIncludes schema:Thing ;
+    schema:rangeIncludes schema:PropertyValue ,
+                         schema:Text ,
+                         schema:URL .
+
+schema:birthDate
+    a rdf:Property ;
+    rdfs:label "birthDate" ;
+    rdfs:comment "Date of birth." ;
+    schema:domainIncludes schema:Person ;
+    schema:rangeIncludes schema:Date .
+
+schema:address
+    a rdf:Property ;
+    rdfs:label "address" ;
+    rdfs:comment "Physical address of the item." ;
+    schema:domainIncludes schema:GeoCoordinates ,
+                         schema:GeoShape ,
+                         schema:Organization ,
+                         schema:Person ,
+                         schema:Place ;
+    schema:rangeIncludes schema:PostalAddress ,
+                         schema:Text .
+
+schema:addressCountry
+    a rdf:Property ;
+    rdfs:label "addressCountry" ;
+    rdfs:comment "The country. Recommended to be in 2-letter ISO 3166-1 alpha-2 format, for example \"US\". For backward compatibility, a 3-letter ISO 3166-1 alpha-3 country code such as \"SGP\" or a full country name such as \"Singapore\" can also be used." ;
+    schema:domainIncludes schema:DefinedRegion ,
+                         schema:GeoCoordinates ,
+                         schema:GeoShape ,
+                         schema:PostalAddress ;
+    schema:rangeIncludes schema:Country ,
+                         schema:Text .
+
+schema:addressRegion
+    a rdf:Property ;
+    rdfs:label "addressRegion" ;
+    rdfs:comment "The region in which the locality is, and which is in the country. For example, California or another appropriate first-level Administrative division such as the Province in Italy or Region in Germany." ;
+    schema:domainIncludes schema:PostalAddress ;
+    schema:rangeIncludes schema:AdministrativeArea ,
+                         schema:Text .
+
+schema:addressLocality
+    a rdf:Property ;
+    rdfs:label "addressLocality" ;
+    rdfs:comment "The locality in which the street address is, and which is in the region. For example, Mountain View." ;
+    schema:domainIncludes schema:PostalAddress ;
+    schema:rangeIncludes schema:Text .
+
+schema:value
+    a rdf:Property ;
+    rdfs:label "value" ;
+    rdfs:comment "The value of a QuantitativeValue (including Observation) or property value node." ;
+    schema:domainIncludes schema:MonetaryAmount ,
+                         schema:PropertyValue ,
+                         schema:QuantitativeValue ;
+    schema:rangeIncludes schema:Boolean ,
+                         schema:Number ,
+                         schema:StructuredValue ,
+                         schema:Text .
+
+schema:currency
+    a rdf:Property ;
+    rdfs:label "currency" ;
+    rdfs:comment "The currency in which the monetary amount is expressed." ;
+    schema:domainIncludes schema:DatedMoneySpecification ,
+                         schema:ExchangeRateSpecification ,
+                         schema:LoanOrCredit ,
+                         schema:MonetaryAmount ,
+                         schema:MonetaryGrant ;
+    schema:rangeIncludes schema:Text .
+
+schema:propertyID
+    a rdf:Property ;
+    rdfs:label "propertyID" ;
+    rdfs:comment "A commonly used identifier for the characteristic represented by the property, e.g. a manufacturer or a standard code for a property." ;
+    schema:domainIncludes schema:PropertyValue ;
+    schema:rangeIncludes schema:Text ,
+                         schema:URL .
+
+
+#################################################################
+# SKOS Classes
+#################################################################
+
+skos:Concept
+    a owl:Class ;
+    rdfs:label "Concept"@en ;
+    rdfs:isDefinedBy <http://www.w3.org/2004/02/skos/core> .
+
+skos:ConceptScheme
+    a owl:Class ;
+    rdfs:label "Concept Scheme"@en ;
+    rdfs:isDefinedBy <http://www.w3.org/2004/02/skos/core> .
+
+
+#################################################################
+# SKOS Label Properties
+#################################################################
+
+skos:prefLabel
+    a rdf:Property ,
+      owl:AnnotationProperty ;
+    rdfs:label "preferred label"@en ;
+    rdfs:subPropertyOf rdfs:label ;
+    rdfs:isDefinedBy <http://www.w3.org/2004/02/skos/core> ;
+    skos:definition
+        "The preferred lexical label for a resource, in a given language."@en .
+
+skos:altLabel
+    a rdf:Property ,
+      owl:AnnotationProperty ;
+    rdfs:label "alternative label"@en ;
+    rdfs:subPropertyOf rdfs:label ;
+    rdfs:isDefinedBy <http://www.w3.org/2004/02/skos/core> ;
+    skos:definition
+        "An alternative lexical label for a resource."@en .
+
+skos:definition
+    a rdf:Property ,
+      owl:AnnotationProperty ;
+    rdfs:label "definition"@en ;
+    rdfs:subPropertyOf skos:note ;
+    rdfs:isDefinedBy <http://www.w3.org/2004/02/skos/core> .
+
+
+#################################################################
+# SKOS Concept Scheme Property
+#################################################################
+
+skos:inScheme
+    a rdf:Property ,
+      owl:ObjectProperty ;
+    rdfs:label "is in scheme"@en ;
+    rdfs:range skos:ConceptScheme ;
+    rdfs:isDefinedBy <http://www.w3.org/2004/02/skos/core> .
+
+
+#################################################################
+# SKOS Semantic Relations
+#################################################################
+
+skos:semanticRelation
+    a rdf:Property ,
+      owl:ObjectProperty ;
+    rdfs:label "is in semantic relation with"@en ;
+    rdfs:domain skos:Concept ;
+    rdfs:range skos:Concept ;
+    rdfs:isDefinedBy <http://www.w3.org/2004/02/skos/core> .
+
+skos:broader
+    a rdf:Property ,
+      owl:ObjectProperty ;
+    rdfs:label "has broader"@en ;
+    rdfs:subPropertyOf skos:broaderTransitive ;
+    owl:inverseOf skos:narrower ;
+    rdfs:isDefinedBy <http://www.w3.org/2004/02/skos/core> .
+
+skos:narrower
+    a rdf:Property ,
+      owl:ObjectProperty ;
+    rdfs:label "has narrower"@en ;
+    rdfs:subPropertyOf skos:narrowerTransitive ;
+    owl:inverseOf skos:broader ;
+    rdfs:isDefinedBy <http://www.w3.org/2004/02/skos/core> .
+
+skos:related
+    a rdf:Property ,
+      owl:ObjectProperty ,
+      owl:SymmetricProperty ;
+    rdfs:label "has related"@en ;
+    rdfs:subPropertyOf skos:semanticRelation ;
+    rdfs:isDefinedBy <http://www.w3.org/2004/02/skos/core> ;
+    skos:definition
+        "Relates a concept to a concept with which there is an associative semantic relationship."@en .

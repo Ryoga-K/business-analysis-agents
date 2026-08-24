@@ -1,12 +1,66 @@
-@prefix data: <https://example.org/business-analysis/data#> .
+@prefix schema: <https://schema.org/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix dsh: <http://example.org/shapes/data#> .
 
-data:DataEntityShape a sh:NodeShape ;
-    sh:targetClass data:DataEntity ;
-    sh:property [ sh:path data:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+dsh:PersonShape a sh:NodeShape ;
+    sh:targetClass schema:Person ;
+    sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path schema:birthDate ; sh:maxCount 1 ; sh:datatype xsd:date ] ;
+    sh:property [
+        sh:path schema:address ;
+        sh:or (
+            [ sh:class schema:PostalAddress ]
+            [ sh:datatype xsd:string ]
+        )
+    ] .
 
-data:EvidenceShape a sh:NodeShape ;
-    sh:targetClass data:Evidence ;
-    sh:property [ sh:path data:sourcePage ; sh:minCount 1 ; sh:datatype xsd:integer ] ;
-    sh:property [ sh:path data:evidenceText ; sh:minCount 1 ; sh:datatype xsd:string ] .
+dsh:OrganizationShape a sh:NodeShape ;
+    sh:targetClass schema:Organization ;
+    sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [
+        sh:path schema:address ;
+        sh:or (
+            [ sh:class schema:PostalAddress ]
+            [ sh:datatype xsd:string ]
+        )
+    ] .
+
+dsh:PostalAddressShape a sh:NodeShape ;
+    sh:targetClass schema:PostalAddress ;
+    sh:property [ sh:path schema:addressCountry ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path schema:addressRegion ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path schema:addressLocality ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+
+dsh:DigitalDocumentShape a sh:NodeShape ;
+    sh:targetClass schema:DigitalDocument ;
+    sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+
+dsh:MonetaryAmountShape a sh:NodeShape ;
+    sh:targetClass schema:MonetaryAmount ;
+    sh:property [ sh:path schema:value ; sh:minCount 1 ] ;
+    sh:property [
+        sh:path schema:currency ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string
+    ] .
+
+dsh:PropertyValueShape a sh:NodeShape ;
+    sh:targetClass schema:PropertyValue ;
+    sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path schema:value ; sh:minCount 1 ] ;
+    sh:property [ sh:path schema:propertyID ; sh:maxCount 1 ] .
+
+dsh:ConceptShape a sh:NodeShape ;
+    sh:targetClass skos:Concept ;
+    sh:property [ sh:path skos:prefLabel ; sh:minCount 1 ; sh:uniqueLang true ] ;
+    sh:property [ sh:path skos:inScheme ; sh:class skos:ConceptScheme ] ;
+    sh:property [ sh:path skos:broader ; sh:class skos:Concept ] ;
+    sh:property [ sh:path skos:narrower ; sh:class skos:Concept ] ;
+    sh:property [ sh:path skos:related ; sh:class skos:Concept ] .
+
+dsh:ConceptSchemeShape a sh:NodeShape ;
+    sh:targetClass skos:ConceptScheme ;
+    sh:property [ sh:path skos:prefLabel ; sh:minCount 1 ; sh:uniqueLang true ] .

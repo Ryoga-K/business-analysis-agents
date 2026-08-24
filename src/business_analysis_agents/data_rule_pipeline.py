@@ -304,40 +304,6 @@ def run_data_rule_pipeline(
     data_shapes_hash = content_hash(data_shapes)
     rule_shapes_hash = content_hash(rule_shapes)
 
-    write_text(data_rule_dir / "data_ontology_v0_1.ttl", data_ontology)
-    write_text(data_rule_dir / "rule_ontology_v0_1.ttl", rule_ontology)
-    write_text(data_rule_dir / "data_shapes_v0_1.ttl", data_shapes)
-    write_text(data_rule_dir / "rule_shapes_v0_1.ttl", rule_shapes)
-    write_json(
-        data_rule_dir / "data_rule_ontology_design.json",
-        {
-            "source": "fixed_ttl",
-            "data_ontology_file": str(data_ontology_path),
-            "rule_ontology_file": str(rule_ontology_path),
-            "data_shapes_file": str(data_shapes_path),
-            "rule_shapes_file": str(rule_shapes_path),
-        },
-    )
-    write_json(
-        data_rule_dir / "data_ontology_validation.json",
-        _ontology_validation_payload(data_ontology_validation),
-    )
-    write_json(
-        data_rule_dir / "rule_ontology_validation.json",
-        _ontology_validation_payload(rule_ontology_validation),
-    )
-    write_json(
-        data_rule_dir / "data_rule_ontology_history.json",
-        {
-            "fixed": True,
-            "source": "fixed_ttl",
-            "data_ontology_hash": data_ontology_hash,
-            "rule_ontology_hash": rule_ontology_hash,
-            "data_shapes_hash": data_shapes_hash,
-            "rule_shapes_hash": rule_shapes_hash,
-        },
-    )
-
     initial_data_turtle, data_turtle, data_output, data_validation, data_history = _generate_and_revise_data(
         scenario,
         model=model,
@@ -352,6 +318,10 @@ def run_data_rule_pipeline(
         rule_shapes=rule_shapes,
         max_iterations=max_data_iterations,
     )
+    write_text(data_rule_dir / "data_final.ttl", data_turtle)
+    write_json(data_rule_dir / "data_validation.json", _validation_payload(data_validation))
+    write_json(data_rule_dir / "data_revision_history.json", data_history)
+
     initial_rule_turtle, rule_turtle, rule_output, rule_validation, rule_history = _generate_and_revise_rule(
         scenario,
         model=model,
@@ -367,6 +337,9 @@ def run_data_rule_pipeline(
         data_shapes=data_shapes,
         max_iterations=max_rule_iterations,
     )
+    write_text(data_rule_dir / "rule_final.ttl", rule_turtle)
+    write_json(data_rule_dir / "rule_validation.json", _validation_payload(rule_validation))
+    write_json(data_rule_dir / "rule_revision_history.json", rule_history)
 
     final_status = (
         "completed"
@@ -376,17 +349,6 @@ def run_data_rule_pipeline(
         and rule_ontology_validation.conforms
         else "needs_review"
     )
-    write_text(data_rule_dir / "data_initial.ttl", initial_data_turtle)
-    write_text(data_rule_dir / "data_final.ttl", data_turtle)
-    write_text(data_rule_dir / "rule_initial.ttl", initial_rule_turtle)
-    write_text(data_rule_dir / "rule_final.ttl", rule_turtle)
-    write_json(data_rule_dir / "data_agent_output.json", _output_payload(data_output))
-    write_json(data_rule_dir / "rule_agent_output.json", _output_payload(rule_output))
-    write_json(data_rule_dir / "data_validation.json", _validation_payload(data_validation))
-    write_json(data_rule_dir / "rule_validation.json", _validation_payload(rule_validation))
-    write_json(data_rule_dir / "data_revision_history.json", data_history)
-    write_json(data_rule_dir / "rule_revision_history.json", rule_history)
-
     metadata = {
         "scenario_file": str(scenario_path),
         "execution_datetime": datetime.now().isoformat(),
@@ -404,8 +366,6 @@ def run_data_rule_pipeline(
         "max_rule_iterations": max_rule_iterations,
         "final_status": final_status,
     }
-    write_json(data_rule_dir / "data_rule_run_metadata.json", metadata)
-
     return {
         "output_dir": str(data_rule_dir),
         "final_status": final_status,
