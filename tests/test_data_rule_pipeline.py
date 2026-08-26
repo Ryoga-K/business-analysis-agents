@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pymupdf
 import pytest
 from agents.exceptions import ModelBehaviorError
 
@@ -432,6 +433,16 @@ def _write_fixed_files(tmp_path):
     return data_ontology_file, rule_ontology_file, data_shapes_file, rule_shapes_file
 
 
+def _write_source_pdf(tmp_path):
+    pdf_file = tmp_path / "source.pdf"
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "PDF detail: amount must be at least 1000 JPY.")
+    document.save(pdf_file)
+    document.close()
+    return pdf_file
+
+
 def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_path) -> None:
     """Pipeline saves only final RDF, validation, and revision history."""
 
@@ -439,9 +450,12 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
     fixed_files = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
     call_order: list[str] = []
 
     def fake_runner(_agent, prompt):
+        assert "source_document" in prompt
+        assert "PDF detail: amount must be at least 1000 JPY." in prompt
         if "data_generation" in prompt:
             call_order.append("data_generation")
             return SimpleNamespace(
@@ -462,6 +476,7 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
     result = run_data_rule_pipeline(
         scenario_file,
         model="gpt-test",
+        pdf_file=pdf_file,
         output_dir=tmp_path / "data_rule",
         runner=fake_runner,
         data_ontology_file=fixed_files[0],
@@ -489,8 +504,11 @@ def test_pipeline_saves_data_outputs_before_rule_processing(monkeypatch, tmp_pat
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
     fixed_files = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
 
     def fake_runner(_agent, prompt):
+        assert "source_document" in prompt
+        assert "PDF detail: amount must be at least 1000 JPY." in prompt
         if "data_generation" in prompt:
             return SimpleNamespace(
                 final_output=DataRuleAgentOutput(
@@ -505,6 +523,7 @@ def test_pipeline_saves_data_outputs_before_rule_processing(monkeypatch, tmp_pat
         run_data_rule_pipeline(
             scenario_file,
             model="gpt-test",
+            pdf_file=pdf_file,
             output_dir=output_dir,
             runner=fake_runner,
             data_ontology_file=fixed_files[0],
@@ -527,11 +546,14 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
     fixed_files = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
     data_revision_calls = 0
     rule_revision_calls = 0
 
     def fake_runner(_agent, prompt):
         nonlocal data_revision_calls, rule_revision_calls
+        assert "source_document" in prompt
+        assert "PDF detail: amount must be at least 1000 JPY." in prompt
         if "data_revision" in prompt:
             data_revision_calls += 1
             return SimpleNamespace(
@@ -565,6 +587,7 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
     result = run_data_rule_pipeline(
         scenario_file,
         model="gpt-test",
+        pdf_file=pdf_file,
         output_dir=tmp_path / "data_rule",
         max_data_iterations=2,
         max_rule_iterations=2,

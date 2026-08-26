@@ -19,10 +19,13 @@ BASE_WORKFLOW_INSTRUCTIONS = """
 あなたはWorkflow RDF抽出を担当するAIエージェントです。
 
 全体ルール:
-- 入力された業務シナリオJSONだけを業務情報の根拠にしてください。
+- 業務シナリオJSONを業務全体の構造・流れの把握に使用してください。
+- source_documentのページ番号付きPDF本文を、詳細情報と根拠情報の確認に使用してください。
+- シナリオJSONにない情報でも、PDF本文に明確に記載され、Workflow RDFに必要であれば抽出してください。
+- シナリオJSONとPDF本文が矛盾する場合は、原則としてPDF本文を根拠とし、矛盾をunresolved_itemsに記録してください。
 - 与えられたOntology TTLを唯一の業務語彙体系として扱ってください。
 - Ontology TTLやSHACL TTLを生成・変更しないでください。
-- シナリオに書かれていない活動、実行主体、データ、条件、順序、根拠を推測しないでください。
+- PDF本文にもシナリオJSONにも書かれていない活動、実行主体、データ、条件、順序、根拠を推測しないでください。
 - 不確実な情報を無理に補完しないでください。不明点はunresolved_itemsに入れてください。
 - すべてのモードでWorkflowAgentOutput Pydanticモデルを使って返してください。
 - 説明用・設計用フィールドは、柔軟なJSON構造で返してかまいません。
@@ -38,6 +41,9 @@ WORKFLOW_GENERATION_INSTRUCTIONS = """
 Mode: workflow_generation
 プロンプトで与えられた固定済みのontology_turtleとshacl_turtleを参照してください。
 Workflow RDFを完全なTurtle文字列として直接生成してください。
+
+シナリオJSONから業務全体の構造を把握し、PDF本文から業務活動、実行主体、
+順序、分岐、入出力、例外、根拠の詳細を確認してください。
 
 ルール:
 - 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
@@ -64,8 +70,10 @@ workflow_rdf_turtleだけを修正してください。
 - 制約を弱めること
 - 根拠のない業務情報を追加すること
 
-RDFLibのparse error、語彙検証結果、SHACL検証結果、修正履歴を使って
-Workflow RDFを修正してください。根拠のない業務仮定を置かなければ修正できない問題は、
+PDF本文、シナリオJSON、RDFLibのparse error、語彙検証結果、SHACL検証結果、
+現在のWorkflow RDF、修正履歴を使ってWorkflow RDFを修正してください。
+SHACL違反を解消するためにPDF本文に根拠のない情報を追加しないでください。
+根拠のない業務仮定を置かなければ修正できない問題は、
 remaining_violationsとunresolved_itemsに残してください。
 workflow_rdf_turtleは必須です。
 """.strip()

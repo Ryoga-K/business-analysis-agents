@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from business_analysis_agents.agents.data_rule import run_data_rule_agent
+from business_analysis_agents.document_loader import load_pdf_document
 from business_analysis_agents.fixed_resources import (
     DEFAULT_DATA_ONTOLOGY,
     DEFAULT_DATA_SHAPES,
@@ -84,6 +85,7 @@ def _assert_fixed_hashes(
 
 def _generate_and_revise_data(
     scenario: ScenarioAgentOutput,
+    source_document: dict[str, Any],
     model: str,
     runner: Callable[..., Any] | None,
     data_ontology: str,
@@ -101,6 +103,7 @@ def _generate_and_revise_data(
         DataRuleAgentMode.DATA_GENERATION,
         {
             "scenario_json": scenario.model_dump(mode="json"),
+            "source_document": source_document,
             "ontology_turtle": data_ontology,
             "data_shacl_turtle": data_shapes,
             "ontology_hash": data_ontology_hash,
@@ -137,6 +140,7 @@ def _generate_and_revise_data(
             DataRuleAgentMode.DATA_REVISION,
             {
                 "scenario_json": scenario.model_dump(mode="json"),
+                "source_document": source_document,
                 "ontology_turtle": data_ontology,
                 "data_shacl_turtle": data_shapes,
                 "previous_data_rdf": data_turtle,
@@ -170,6 +174,7 @@ def _generate_and_revise_data(
 
 def _generate_and_revise_rule(
     scenario: ScenarioAgentOutput,
+    source_document: dict[str, Any],
     model: str,
     runner: Callable[..., Any] | None,
     rule_ontology: str,
@@ -188,6 +193,7 @@ def _generate_and_revise_rule(
         DataRuleAgentMode.RULE_GENERATION,
         {
             "scenario_json": scenario.model_dump(mode="json"),
+            "source_document": source_document,
             "validated_data_rdf": data_turtle,
             "ontology_turtle": rule_ontology,
             "rule_shacl_turtle": rule_shapes,
@@ -226,6 +232,7 @@ def _generate_and_revise_rule(
             DataRuleAgentMode.RULE_REVISION,
             {
                 "scenario_json": scenario.model_dump(mode="json"),
+                "source_document": source_document,
                 "validated_data_rdf": data_turtle,
                 "ontology_turtle": rule_ontology,
                 "rule_shacl_turtle": rule_shapes,
@@ -262,6 +269,7 @@ def _generate_and_revise_rule(
 def run_data_rule_pipeline(
     scenario_file: Path | str,
     model: str,
+    pdf_file: Path | str,
     output_dir: Path | str = "outputs/data_rule",
     max_data_iterations: int = DEFAULT_MAX_DATA_ITERATIONS,
     max_rule_iterations: int = DEFAULT_MAX_RULE_ITERATIONS,
@@ -277,6 +285,12 @@ def run_data_rule_pipeline(
     data_rule_dir = Path(output_dir)
     data_rule_dir.mkdir(parents=True, exist_ok=True)
     scenario = load_scenario_output(scenario_path)
+    pdf_path = Path(pdf_file)
+    source_document = load_pdf_document(pdf_path)
+    source_document_payload = source_document.model_dump(
+        mode="json",
+        exclude={"text"},
+    )
 
     data_ontology_path, data_ontology = load_fixed_turtle(
         data_ontology_file, "Data ontology"
@@ -306,6 +320,7 @@ def run_data_rule_pipeline(
 
     initial_data_turtle, data_turtle, data_output, data_validation, data_history = _generate_and_revise_data(
         scenario,
+        source_document_payload,
         model=model,
         runner=runner,
         data_ontology=data_ontology,
@@ -324,6 +339,7 @@ def run_data_rule_pipeline(
 
     initial_rule_turtle, rule_turtle, rule_output, rule_validation, rule_history = _generate_and_revise_rule(
         scenario,
+        source_document_payload,
         model=model,
         runner=runner,
         rule_ontology=rule_ontology,
@@ -351,6 +367,7 @@ def run_data_rule_pipeline(
     )
     metadata = {
         "scenario_file": str(scenario_path),
+        "pdf_file": str(pdf_path),
         "execution_datetime": datetime.now().isoformat(),
         "model": model,
         "agent_name": "related_data_rule_agent",

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from business_analysis_agents.agents.workflow import run_workflow_agent
+from business_analysis_agents.document_loader import load_pdf_document
 from business_analysis_agents.fixed_resources import (
     DEFAULT_WORKFLOW_ONTOLOGY,
     DEFAULT_WORKFLOW_SHAPES,
@@ -119,6 +120,7 @@ def _remove_debug_outputs(workflow_dir: Path) -> None:
 def run_workflow_pipeline(
     scenario_file: Path | str,
     model: str,
+    pdf_file: Path | str,
     output_dir: Path | str = "outputs/workflow",
     max_workflow_iterations: int = DEFAULT_MAX_WORKFLOW_ITERATIONS,
     runner: Callable[..., Any] | None = None,
@@ -132,6 +134,12 @@ def run_workflow_pipeline(
     workflow_dir = Path(output_dir)
     workflow_dir.mkdir(parents=True, exist_ok=True)
     scenario = load_scenario_output(scenario_path)
+    pdf_path = Path(pdf_file)
+    source_document = load_pdf_document(pdf_path)
+    source_document_payload = source_document.model_dump(
+        mode="json",
+        exclude={"text"},
+    )
     revision_history: list[dict[str, Any]] = []
 
     ontology_path, ontology_turtle = load_fixed_turtle(
@@ -177,6 +185,7 @@ def run_workflow_pipeline(
         WorkflowAgentMode.WORKFLOW_GENERATION,
         {
             "scenario_json": scenario.model_dump(mode="json"),
+            "source_document": source_document_payload,
             "ontology_turtle": ontology_turtle,
             "shacl_turtle": shacl_turtle,
             "ontology_hash": ontology_hash,
@@ -206,6 +215,7 @@ def run_workflow_pipeline(
             WorkflowAgentMode.WORKFLOW_REVISION,
             {
                 "scenario_json": scenario.model_dump(mode="json"),
+                "source_document": source_document_payload,
                 "ontology_turtle": ontology_turtle,
                 "shacl_turtle": shacl_turtle,
                 "previous_workflow_rdf": workflow_turtle,
@@ -246,6 +256,7 @@ def run_workflow_pipeline(
 
     metadata = {
         "scenario_file": str(scenario_path),
+        "pdf_file": str(pdf_path),
         "execution_datetime": datetime.now().isoformat(),
         "model": model,
         "agent_name": "workflow_agent",

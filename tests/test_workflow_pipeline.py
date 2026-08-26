@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pymupdf
 import pytest
 from agents.exceptions import ModelBehaviorError
 
@@ -358,6 +359,16 @@ def _write_fixed_files(tmp_path):
     return ontology_file, shapes_file
 
 
+def _write_source_pdf(tmp_path):
+    pdf_file = tmp_path / "source.pdf"
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "PDF detail: a clerk checks the order amount.")
+    document.save(pdf_file)
+    document.close()
+    return pdf_file
+
+
 def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     """Pipeline saves final artifacts and stops without revision when SHACL conforms."""
 
@@ -365,11 +376,14 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
     ontology_file, shapes_file = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
     workflow_dir = tmp_path / "workflow"
     workflow_dir.mkdir()
     (workflow_dir / "workflow_run_metadata.json").write_text("stale", encoding="utf-8")
 
     def fake_runner(_agent, prompt):
+        assert "source_document" in prompt
+        assert "PDF detail: a clerk checks the order amount." in prompt
         return SimpleNamespace(
             final_output=WorkflowAgentOutput(
                 mode=WorkflowAgentMode.WORKFLOW_GENERATION,
@@ -380,6 +394,7 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     result = run_workflow_pipeline(
         scenario_file,
         model="gpt-test",
+        pdf_file=pdf_file,
         output_dir=workflow_dir,
         runner=fake_runner,
         ontology_file=ontology_file,
@@ -407,10 +422,13 @@ def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> N
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
     ontology_file, shapes_file = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
     revision_calls = 0
 
     def fake_runner(_agent, prompt):
         nonlocal revision_calls
+        assert "source_document" in prompt
+        assert "PDF detail: a clerk checks the order amount." in prompt
         if "workflow_revision" in prompt:
             revision_calls += 1
             return SimpleNamespace(
@@ -430,6 +448,7 @@ def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> N
     result = run_workflow_pipeline(
         scenario_file,
         model="gpt-test",
+        pdf_file=pdf_file,
         output_dir=tmp_path / "workflow",
         max_workflow_iterations=2,
         runner=fake_runner,
@@ -460,6 +479,7 @@ def test_pipeline_saves_detailed_artifacts_in_debug_mode(monkeypatch, tmp_path) 
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
     ontology_file, shapes_file = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
 
     def fake_runner(_agent, _prompt):
         return SimpleNamespace(
@@ -472,6 +492,7 @@ def test_pipeline_saves_detailed_artifacts_in_debug_mode(monkeypatch, tmp_path) 
     run_workflow_pipeline(
         scenario_file,
         model="gpt-test",
+        pdf_file=pdf_file,
         output_dir=tmp_path / "workflow",
         runner=fake_runner,
         ontology_file=ontology_file,
@@ -494,9 +515,11 @@ def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> N
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
     ontology_file, shapes_file = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
     generated = "this is not turtle"
 
     def fake_runner(_agent, prompt):
+        assert "PDF detail: a clerk checks the order amount." in prompt
         return SimpleNamespace(
             final_output=WorkflowAgentOutput(
                 mode=WorkflowAgentMode.WORKFLOW_GENERATION,
@@ -507,6 +530,7 @@ def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> N
     run_workflow_pipeline(
         scenario_file,
         model="gpt-test",
+        pdf_file=pdf_file,
         output_dir=tmp_path / "workflow",
         max_workflow_iterations=0,
         runner=fake_runner,
@@ -526,6 +550,7 @@ def test_pipeline_stops_when_fixed_ontology_is_missing(monkeypatch, tmp_path) ->
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
     _, shapes_file = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
 
     def unexpected_runner(_agent, _prompt):
         pytest.fail("Agent must not run when a fixed ontology file is missing")
@@ -534,6 +559,7 @@ def test_pipeline_stops_when_fixed_ontology_is_missing(monkeypatch, tmp_path) ->
         run_workflow_pipeline(
             scenario_file,
             model="gpt-test",
+            pdf_file=pdf_file,
             output_dir=tmp_path / "workflow",
             runner=unexpected_runner,
             ontology_file=tmp_path / "missing.ttl",
