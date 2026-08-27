@@ -1,0 +1,52 @@
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix dcmitype: <http://purl.org/dc/dcmitype/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+
+<http://example.org/ontology/scenario>
+    a owl:Ontology ;
+    rdfs:label "Scenario RDF Vocabulary Subset"@en .
+
+
+# ============================================================
+# Classes
+# ============================================================
+
+prov:Agent
+    a owl:Class ;
+    rdfs:label "Agent"@en .
+
+prov:Activity
+    a owl:Class ;
+    rdfs:label "Activity"@en .
+
+dcmitype:Collection
+    a rdfs:Class ;
+    rdfs:label "Collection"@en .
+
+
+# ============================================================
+# Properties
+# ============================================================
+
+dcterms:title
+    a rdf:Property ;
+    rdfs:label "Title"@en ;
+    rdfs:range rdfs:Literal .
+
+dcterms:description
+    a rdf:Property ;
+    rdfs:label "Description"@en .
+
+dcterms:hasPart
+    a rdf:Property ;
+    rdfs:label "Has Part"@en .
+
+prov:wasAssociatedWith
+    a owl:ObjectProperty ;
+    rdfs:label "wasAssociatedWith"@en ;
+    rdfs:domain prov:Activity ;
+    rdfs:range prov:Agent ;
+    rdfs:subPropertyOf prov:wasInfluencedBy .

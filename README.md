@@ -2,13 +2,13 @@
 
 OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Workflow RDF、Data RDF、Rule RDFを生成・検証する研究用プロトタイプです。
 
-現在は、PDFから業務シナリオJSONを生成し、元PDFとシナリオJSONの両方を入力としてWorkflow RDF、Data RDF、Rule RDFを生成・検証・修正する最小パイプラインまで実装しています。Web UI、DB保存、人間レビューUI、RDF間Cross Reviewはまだ実装していません。
+現在は、PDFと固定Scenario OntologyからScenario RDFを生成し、元PDFとScenario RDFの両方を入力としてWorkflow RDF、Data RDF、Rule RDFを生成・検証・修正する最小パイプラインまで実装しています。Web UI、DB保存、人間レビューUI、RDF間Cross Reviewはまだ実装していません。
 
 ## 実装済み
 
 - PyMuPDFによるPDFテキストのページ単位抽出
-- Scenario Agentによる固定フォーマットの業務シナリオJSON生成
-- 元PDFとシナリオJSONの両方を参照したWorkflow/Data/Rule RDF生成・修正
+- 固定Scenario Ontologyを参照したScenario RDFのTurtle直接生成
+- 元PDFとScenario RDFの両方を参照したWorkflow/Data/Rule RDF生成・修正
 - Workflow AgentによるWorkflow RDF生成
 - 固定Workflow ontology / SHACL Shapesを参照したWorkflow RDF生成
 - Workflow RDFのRDFLib構文検証、語彙検証、pySHACL検証
@@ -27,7 +27,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - 各モードで必要なTurtle文字列はパイプライン側で明示的に確認する。
 - Turtle本文はPydanticでは `str` として受け取り、内容の妥当性はRDFLibとpySHACLで検証する。
 - LLMが生成したWorkflow/Data/Rule RDFをPython側で機械的に補完しない。
-- シナリオJSONにない業務内容は推測せず、未確定事項として残す。
+- PDFとScenario RDFのどちらにもない業務内容は推測しない。
 - ontologyとSHACL Shapesは事前定義TTLから読み込み、revisionではRDF本体だけを修正する。
 - ontology / SHACLが存在しない場合は停止し、LLM生成へフォールバックしない。
 - SQL、DB、Web UIは現時点では使用しない。
@@ -41,6 +41,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 ├── .env.example
 ├── README.md
 ├── ontology/
+│   ├── scenario_ontology.ttl
 │   ├── workflow_ontology.ttl
 │   ├── data_ontology.ttl
 │   └── rule_ontology.ttl
@@ -108,7 +109,7 @@ python main.py
 システムを開始しました
 ```
 
-### 2. PDFから業務シナリオJSONを生成
+### 2. PDFからScenario RDFを生成
 
 ```powershell
 python main.py inputs\sample.pdf
@@ -117,13 +118,13 @@ python main.py inputs\sample.pdf
 出力例:
 
 ```text
-outputs/run_YYYYMMDD_HHMMSS/scenario.json
+outputs/scenario/scenario_final.ttl
 ```
 
-### 3. PDFとシナリオJSONからWorkflow RDFを生成
+### 3. PDFとScenario RDFからWorkflow RDFを生成
 
 ```powershell
-python -m business_analysis_agents workflow --pdf inputs\sample.pdf --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json
+python -m business_analysis_agents workflow --pdf inputs\sample.pdf --scenario outputs\scenario\scenario_final.ttl
 ```
 
 デフォルト以外のWorkflow ontology / SHACL Shapesを使用する場合:
@@ -131,7 +132,7 @@ python -m business_analysis_agents workflow --pdf inputs\sample.pdf --scenario o
 ```powershell
 python -m business_analysis_agents workflow `
   --pdf inputs\sample.pdf `
-  --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json `
+  --scenario outputs\scenario\scenario_final.ttl `
   --ontology path\to\workflow_ontology.ttl `
   --shapes path\to\workflow_shapes.ttl
 ```
@@ -153,14 +154,14 @@ outputs/workflow/
 ```powershell
 python -m business_analysis_agents workflow `
   --pdf inputs\sample.pdf `
-  --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json `
+  --scenario outputs\scenario\scenario_final.ttl `
   --save-debug-outputs
 ```
 
-### 4. PDFとシナリオJSONからData RDF / Rule RDFを生成
+### 4. PDFとScenario RDFからData RDF / Rule RDFを生成
 
 ```powershell
-python -m business_analysis_agents data-rule --pdf inputs\sample.pdf --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json
+python -m business_analysis_agents data-rule --pdf inputs\sample.pdf --scenario outputs\scenario\scenario_final.ttl
 ```
 
 デフォルト以外の固定TTLを使用する場合:
@@ -168,7 +169,7 @@ python -m business_analysis_agents data-rule --pdf inputs\sample.pdf --scenario 
 ```powershell
 python -m business_analysis_agents data-rule `
   --pdf inputs\sample.pdf `
-  --scenario outputs\run_YYYYMMDD_HHMMSS\scenario.json `
+  --scenario outputs\scenario\scenario_final.ttl `
   --data-ontology path\to\data_ontology.ttl `
   --rule-ontology path\to\rule_ontology.ttl `
   --data-shapes path\to\data_shapes.ttl `
@@ -194,32 +195,31 @@ outputs/data_rule/
 
 ### Scenario Agent
 
-PDFから抽出したページ番号付きテキストを入力し、固定フォーマットの業務シナリオJSONを生成します。
+PDFから抽出したページ番号付きテキストと固定 `ontology/scenario_ontology.ttl` を入力し、Scenario RDFの完全なTurtle文字列を直接生成します。Scenario Ontologyは実行時に変更しません。Scenario RDFには今回、SHACL検証、語彙検証、修正ループを適用しません。
 
-主な出力:
+主な出力要素:
 
-- 業務名
-- 登場人物
-- 業務目的
-- 業務概要
-- 業務手順
-- 未確定事項
+- 型を付けない業務Subject
+- `prov:Agent` として表すActor
+- `prov:Activity` として表すUseCase
+- `dcmitype:Collection` として表すPackage
+- `dcterms:hasPart` と `prov:wasAssociatedWith` による関係
 
 ### Workflow Agent
 
 外部的には1つのAIエージェントです。固定Ontology/SHACLを入力し、内部モードで処理を分けます。
 
-- `workflow_generation`: PDFとシナリオJSONからWorkflow RDFを生成
-- `workflow_revision`: PDF、シナリオJSON、検証結果に基づきWorkflow RDFだけを修正
+- `workflow_generation`: PDFとScenario RDFからWorkflow RDFを生成
+- `workflow_revision`: PDF、Scenario RDF、検証結果に基づきWorkflow RDFだけを修正
 
 ### 関連データ・ルール抽出Agent
 
 外部的には1つのAIエージェントです。固定Ontology/SHACLを入力し、Data RDFとRule RDFを順番に処理します。
 
-- `data_generation`: PDFとシナリオJSONからData RDFを生成
-- `data_revision`: PDF、シナリオJSON、検証結果に基づきData RDFだけを修正
-- `rule_generation`: PDF、シナリオJSON、検証済みData RDFからRule RDFを生成
-- `rule_revision`: PDF、シナリオJSON、検証結果に基づきRule RDFだけを修正
+- `data_generation`: PDFとScenario RDFからData RDFを生成
+- `data_revision`: PDF、Scenario RDF、検証結果に基づきData RDFだけを修正
+- `rule_generation`: PDF、Scenario RDF、検証済みData RDFからRule RDFを生成
+- `rule_revision`: PDF、Scenario RDF、検証結果に基づきRule RDFだけを修正
 
 ## 検証
 
@@ -240,7 +240,7 @@ python -m pytest
 直近の確認結果:
 
 ```text
-43 passed
+45 passed
 ```
 
 ## 未実装

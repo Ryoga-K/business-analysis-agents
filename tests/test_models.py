@@ -135,7 +135,12 @@ def test_models_can_be_serialized_to_json() -> None:
         status=RunStatus.RUNNING,
         output_dir="outputs/run_20260728_142800",
         document=document,
-        scenario_output=ScenarioAgentOutput(scenarios=[scenario]),
+        scenario_output=ScenarioAgentOutput(
+            scenario_rdf_turtle=(
+                '@prefix dcterms: <http://purl.org/dc/terms/> .\n'
+                '<http://example.org/scenario/order> dcterms:title "受注業務" .'
+            )
+        ),
         workflow_output=workflow,
         data_output=data,
         rule_output=rule,

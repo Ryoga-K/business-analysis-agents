@@ -19,13 +19,13 @@ BASE_DATA_RULE_INSTRUCTIONS = """
 あなたは関連データ抽出とルール抽出を担当するAIエージェントです。
 
 全体ルール:
-- 業務シナリオJSONを業務全体の構造・流れの把握に使用してください。
+- Scenario RDFを業務全体、Actor、主要UseCase、Package構造の把握に使用してください。
 - source_documentのページ番号付きPDF本文を、詳細情報と根拠情報の確認に使用してください。
-- シナリオJSONにない情報でも、PDF本文に明確に記載され、対象RDFに必要であれば抽出してください。
-- シナリオJSONとPDF本文が矛盾する場合は、原則としてPDF本文を根拠とし、矛盾をunresolved_itemsに記録してください。
+- Scenario RDFにない情報でも、PDF本文に明確に記載され、対象RDFに必要であれば抽出してください。
+- Scenario RDFとPDF本文が矛盾する場合は、原則としてPDF本文を根拠とし、矛盾をunresolved_itemsに記録してください。
 - 各処理で与えられたOntology TTLを唯一の業務語彙体系として扱ってください。
 - Ontology TTLやSHACL TTLを生成・変更しないでください。
-- PDF本文にもシナリオJSONにも書かれていないデータ、属性、関係、判定条件、結果を推測しないでください。
+- PDF本文にもScenario RDFにも書かれていないデータ、属性、関係、判定条件、結果を推測しないでください。
 - 根拠にはsource_documentのページ番号と本文を使用してください。
 - 不確実または根拠不足の内容はunresolved_itemsに残してください。
 - 指示された場合、Data RDFとRule RDFは完全なTurtle文字列として直接出力してください。
@@ -48,11 +48,11 @@ Data RDFを完全なTurtle文字列として直接生成してください。
 Ontology TTLの定義を参照して、最も適切な語彙を選択してください。
 RDFの構文上必要なrdf:type以外は、Ontology TTLで定義されたPropertyだけを使ってください。
 
-シナリオJSONまたはPDF本文で確認できるデータ概念だけを表現してください。対象には、文書、帳票、
+Scenario RDFまたはPDF本文で確認できるデータ概念だけを表現してください。対象には、文書、帳票、
 通知、結果、データ項目、業務活動によるデータ利用・生成、データ間の関係、
 明示された責任主体、根拠、未解決事項を含めてください。
 
-PDF本文にもシナリオJSONにも書かれていない汎用的な帳票属性を追加しないでください。
+PDF本文にもScenario RDFにも書かれていない汎用的な帳票属性を追加しないでください。
 同じデータ概念に重複URIを割り当てないよう、正規化した識別子を使ってください。
 data_rdf_turtleは必須です。
 """.strip()
@@ -61,7 +61,7 @@ DATA_REVISION_INSTRUCTIONS = """
 Mode: data_revision
 data_rdf_turtleだけを修正してください。
 
-PDF本文、シナリオJSON、現在のData RDF、RDFLibのparse error、語彙検証結果、
+PDF本文、Scenario RDF、現在のData RDF、RDFLibのparse error、語彙検証結果、
 pySHACL結果、修正履歴を使って修正してください。ontology_turtleやData SHACL shapesは変更しないでください。
 SHACL違反を解消するためにPDF本文に根拠のない情報を追加しないでください。根拠不足の情報は削除するか、
 必要に応じて未解決事項として残してください。
@@ -71,7 +71,7 @@ data_rdf_turtleは必須です。
 RULE_GENERATION_INSTRUCTIONS = """
 Mode: rule_generation
 プロンプトで与えられた固定済みのontology_turtle、固定済みのRule SHACL shapes、
-PDF本文、シナリオJSON、検証済みData RDFだけを使ってください。
+PDF本文、Scenario RDF、検証済みData RDFだけを使ってください。
 Rule RDFを完全なTurtle文字列として直接生成してください。
 
 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
@@ -79,9 +79,9 @@ Rule RDFを完全なTurtle文字列として直接生成してください。
 Ontology TTLの定義を参照して、最も適切な語彙を選択してください。
 RDFの構文上必要なrdf:type以外は、Ontology TTLで定義されたPropertyだけを使ってください。
 
-シナリオJSONまたはPDF本文で確認できる判断条件、適用条件、資格・申請条件、
+Scenario RDFまたはPDF本文で確認できる判断条件、適用条件、資格・申請条件、
 数値・期間条件、例外条件、分岐条件、必要書類、結果、データ参照だけを表現してください。
-PDF本文にもシナリオJSONにも明示されていない数式、
+PDF本文にもScenario RDFにも明示されていない数式、
 閾値、AND/OR/NOT構造、形式的な式を作らないでください。
 データを参照する場合は、可能な限り検証済みData RDFで定義されたエンティティを再利用してください。
 rule_rdf_turtleは必須です。
@@ -91,7 +91,7 @@ RULE_REVISION_INSTRUCTIONS = """
 Mode: rule_revision
 rule_rdf_turtleだけを修正してください。
 
-PDF本文、シナリオJSON、前回のRule RDF、検証済みData RDF、固定済みontology_turtle、
+PDF本文、Scenario RDF、前回のRule RDF、検証済みData RDF、固定済みontology_turtle、
 固定済みRule SHACL shapes、RDFLibのparse error、語彙検証結果、pySHACL結果、修正履歴を使って
 修正してください。ontology_turtleやRule SHACL shapesは変更しないでください。
 SHACL違反を解消するためにPDF本文に根拠のない業務ルールを追加しないでください。

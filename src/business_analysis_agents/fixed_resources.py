@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SCENARIO_ONTOLOGY = PROJECT_ROOT / "ontology" / "scenario_ontology.ttl"
 DEFAULT_WORKFLOW_ONTOLOGY = PROJECT_ROOT / "ontology" / "workflow_ontology.ttl"
 DEFAULT_DATA_ONTOLOGY = PROJECT_ROOT / "ontology" / "data_ontology.ttl"
 DEFAULT_RULE_ONTOLOGY = PROJECT_ROOT / "ontology" / "rule_ontology.ttl"

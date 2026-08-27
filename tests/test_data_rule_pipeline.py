@@ -22,12 +22,8 @@ from business_analysis_agents.fixed_resources import (
     DEFAULT_RULE_SHAPES,
 )
 from business_analysis_agents.models import (
-    BusinessProcedureStep,
-    BusinessScenario,
     DataRuleAgentMode,
     DataRuleAgentOutput,
-    EvidenceSpan,
-    ScenarioAgentOutput,
 )
 from business_analysis_agents.rdf_validation import validate_ontology_and_shapes, validate_rdf
 from business_analysis_agents.models import RdfKind
@@ -150,33 +146,19 @@ inst:rule-eligibility a dr:BusinessRule ;
 """.strip()
 
 
-def _scenario() -> ScenarioAgentOutput:
-    return ScenarioAgentOutput(
-        scenarios=[
-            BusinessScenario(
-                scenario_id="SCN1",
-                business_name="Application handling",
-                business_goal="Handle application.",
-                business_overview="Applicant submits an application form.",
-                procedure_steps=[
-                    BusinessProcedureStep(
-                        step_id="S1",
-                        step_name="Submit application",
-                        description="Applicant submits an application form.",
-                        actor="applicant",
-                        input_data=["application form"],
-                        output_data=["submitted application"],
-                        evidence=[
-                            EvidenceSpan(
-                                page_number=1,
-                                text="Applicant submits an application form.",
-                            )
-                        ],
-                    )
-                ],
-            )
-        ]
-    )
+def _scenario_turtle() -> str:
+    return """
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix inst: <http://example.org/scenario/instance/> .
+
+inst:application-subject dcterms:title "Application handling" ;
+    dcterms:hasPart inst:submit-application .
+inst:applicant a prov:Agent ; dcterms:title "Applicant" .
+inst:submit-application a prov:Activity ;
+    dcterms:title "Submit application" ;
+    prov:wasAssociatedWith inst:applicant .
+""".strip()
 
 
 def test_data_rule_agent_is_single_agent_with_four_modes(monkeypatch) -> None:
@@ -220,7 +202,7 @@ def test_data_rule_agent_is_single_agent_with_four_modes(monkeypatch) -> None:
     for mode in DataRuleAgentMode:
         output = run_data_rule_agent(
             mode,
-            payload={"scenario_json": {}},
+            payload={"scenario_rdf_turtle": _scenario_turtle()},
             model="gpt-test",
             runner=fake_runner,
         )
@@ -280,7 +262,7 @@ def test_data_rule_agent_recovers_duplicate_key_output(monkeypatch) -> None:
 
     output = run_data_rule_agent(
         DataRuleAgentMode.RULE_GENERATION,
-        payload={"scenario_json": {}},
+        payload={"scenario_rdf_turtle": _scenario_turtle()},
         model="gpt-test",
         runner=fake_runner,
     )
@@ -447,8 +429,8 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
     """Pipeline saves only final RDF, validation, and revision history."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    scenario_file = tmp_path / "scenario.json"
-    scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
     fixed_files = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
     call_order: list[str] = []
@@ -456,6 +438,8 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
     def fake_runner(_agent, prompt):
         assert "source_document" in prompt
         assert "PDF detail: amount must be at least 1000 JPY." in prompt
+        assert "scenario_rdf_turtle" in prompt
+        assert "Application handling" in prompt
         if "data_generation" in prompt:
             call_order.append("data_generation")
             return SimpleNamespace(
@@ -501,8 +485,8 @@ def test_pipeline_saves_data_outputs_before_rule_processing(monkeypatch, tmp_pat
     """Completed Data artifacts remain available when Rule processing fails."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    scenario_file = tmp_path / "scenario.json"
-    scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
     fixed_files = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
 
@@ -543,8 +527,8 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
     """Pipeline revises only RDF outputs when Data RDF or Rule RDF is invalid."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    scenario_file = tmp_path / "scenario.json"
-    scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
     fixed_files = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
     data_revision_calls = 0
@@ -554,6 +538,8 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
         nonlocal data_revision_calls, rule_revision_calls
         assert "source_document" in prompt
         assert "PDF detail: amount must be at least 1000 JPY." in prompt
+        assert "scenario_rdf_turtle" in prompt
+        assert "Application handling" in prompt
         if "data_revision" in prompt:
             data_revision_calls += 1
             return SimpleNamespace(

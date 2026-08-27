@@ -15,10 +15,6 @@ from business_analysis_agents.agents.workflow import (
     run_workflow_agent,
 )
 from business_analysis_agents.models import (
-    BusinessProcedureStep,
-    BusinessScenario,
-    EvidenceSpan,
-    ScenarioAgentOutput,
     WorkflowAgentMode,
     WorkflowAgentOutput,
 )
@@ -140,33 +136,19 @@ inst:activity-S1 a wf:Activity ;
 """.strip()
 
 
-def _scenario() -> ScenarioAgentOutput:
-    return ScenarioAgentOutput(
-        scenarios=[
-            BusinessScenario(
-                scenario_id="SCN1",
-                business_name="Order handling",
-                business_goal="Process orders.",
-                business_overview="A clerk checks an order.",
-                procedure_steps=[
-                    BusinessProcedureStep(
-                        step_id="S1",
-                        step_name="Check order",
-                        description="A clerk checks an order.",
-                        actor="clerk",
-                        input_data=["order"],
-                        output_data=["checked order"],
-                        evidence=[
-                            EvidenceSpan(
-                                page_number=1,
-                                text="A clerk checks an order.",
-                            )
-                        ],
-                    )
-                ],
-            )
-        ]
-    )
+def _scenario_turtle() -> str:
+    return """
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix inst: <http://example.org/scenario/instance/> .
+
+inst:order-subject dcterms:title "Order handling" ;
+    dcterms:hasPart inst:check-order .
+inst:clerk a prov:Agent ; dcterms:title "Clerk" .
+inst:check-order a prov:Activity ;
+    dcterms:title "Check order" ;
+    prov:wasAssociatedWith inst:clerk .
+""".strip()
 
 
 def test_workflow_agent_is_single_agent_with_two_modes(monkeypatch) -> None:
@@ -196,7 +178,7 @@ def test_workflow_agent_is_single_agent_with_two_modes(monkeypatch) -> None:
     for mode in WorkflowAgentMode:
         output = run_workflow_agent(
             mode,
-            payload={"scenario_json": {}},
+            payload={"scenario_rdf_turtle": _scenario_turtle()},
             model="gpt-test",
             runner=fake_runner,
         )
@@ -264,7 +246,7 @@ def test_workflow_agent_recovers_duplicate_key_output(monkeypatch) -> None:
 
     output = run_workflow_agent(
         WorkflowAgentMode.WORKFLOW_GENERATION,
-        payload={"scenario_json": {}},
+        payload={"scenario_rdf_turtle": _scenario_turtle()},
         model="gpt-test",
         runner=fake_runner,
     )
@@ -373,8 +355,8 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     """Pipeline saves final artifacts and stops without revision when SHACL conforms."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    scenario_file = tmp_path / "scenario.json"
-    scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
     ontology_file, shapes_file = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
     workflow_dir = tmp_path / "workflow"
@@ -384,6 +366,8 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     def fake_runner(_agent, prompt):
         assert "source_document" in prompt
         assert "PDF detail: a clerk checks the order amount." in prompt
+        assert "scenario_rdf_turtle" in prompt
+        assert "Order handling" in prompt
         return SimpleNamespace(
             final_output=WorkflowAgentOutput(
                 mode=WorkflowAgentMode.WORKFLOW_GENERATION,
@@ -419,8 +403,8 @@ def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> N
     """Pipeline stops at max workflow revisions when violations remain."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    scenario_file = tmp_path / "scenario.json"
-    scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
     ontology_file, shapes_file = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
     revision_calls = 0
@@ -429,6 +413,8 @@ def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> N
         nonlocal revision_calls
         assert "source_document" in prompt
         assert "PDF detail: a clerk checks the order amount." in prompt
+        assert "scenario_rdf_turtle" in prompt
+        assert "Order handling" in prompt
         if "workflow_revision" in prompt:
             revision_calls += 1
             return SimpleNamespace(
@@ -476,8 +462,8 @@ def test_pipeline_saves_detailed_artifacts_in_debug_mode(monkeypatch, tmp_path) 
     """Debug mode preserves the detailed artifacts omitted from normal runs."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    scenario_file = tmp_path / "scenario.json"
-    scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
     ontology_file, shapes_file = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
 
@@ -512,8 +498,8 @@ def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> N
     """Python pipeline does not create business RDF triples by itself."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    scenario_file = tmp_path / "scenario.json"
-    scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
     ontology_file, shapes_file = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
     generated = "this is not turtle"
@@ -547,8 +533,8 @@ def test_pipeline_stops_when_fixed_ontology_is_missing(monkeypatch, tmp_path) ->
     """A missing fixed TTL fails clearly without invoking the AI fallback."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    scenario_file = tmp_path / "scenario.json"
-    scenario_file.write_text(_scenario().model_dump_json(), encoding="utf-8")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
     _, shapes_file = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
 

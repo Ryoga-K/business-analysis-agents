@@ -145,15 +145,16 @@ class BusinessScenario(StrictBaseModel):
 
 
 class ScenarioAgentInput(StrictBaseModel):
-    """シナリオ作成エージェントに渡す入力。"""
+    """Scenario RDF生成エージェントに渡す入力。"""
 
     document: SourceDocument
+    ontology_turtle: str = Field(min_length=1)
 
 
 class ScenarioAgentOutput(StrictBaseModel):
-    """シナリオ作成エージェントから返す構造化出力。"""
+    """Scenario Agentが直接生成した完全なTurtle文字列。"""
 
-    scenarios: list[BusinessScenario] = Field(default_factory=list)
+    scenario_rdf_turtle: str = Field(min_length=1)
 
 
 class WorkflowExtractionInput(StrictBaseModel):

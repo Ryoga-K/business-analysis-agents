@@ -14,14 +14,39 @@ from business_analysis_agents.agents.scenario import (
     save_scenario_output,
 )
 from business_analysis_agents.document_loader import load_pdf_document, load_pdf_pages
+from business_analysis_agents.fixed_resources import DEFAULT_SCENARIO_ONTOLOGY
 from business_analysis_agents.models import (
-    BusinessProcedureStep,
-    BusinessScenario,
-    EvidenceSpan,
     ScenarioAgentInput,
     ScenarioAgentOutput,
     SourceDocument,
 )
+
+
+ONTOLOGY_TTL = """
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix dcmitype: <http://purl.org/dc/dcmitype/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+""".strip()
+
+SCENARIO_TTL = """
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix dcmitype: <http://purl.org/dc/dcmitype/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix inst: <http://example.org/scenario/instance/> .
+
+inst:order-subject
+    dcterms:title "Order handling" ;
+    dcterms:description "A clerk handles an order." ;
+    dcterms:hasPart inst:order-package .
+
+inst:clerk a prov:Agent ; dcterms:title "Clerk" .
+inst:order-package a dcmitype:Collection ;
+    dcterms:title "Order processing" ;
+    dcterms:hasPart inst:check-order .
+inst:check-order a prov:Activity ;
+    dcterms:title "Check order" ;
+    prov:wasAssociatedWith inst:clerk .
+""".strip()
 
 
 class FakePage:
@@ -57,6 +82,23 @@ class FakeDocument:
         return iter(self.pages)
 
 
+def test_fixed_scenario_ontology_contains_required_vocabulary() -> None:
+    """The fixed Scenario Ontology contains every term required by the prompt."""
+
+    ontology = DEFAULT_SCENARIO_ONTOLOGY.read_text(encoding="utf-8")
+
+    for term in (
+        "dcterms:title",
+        "dcterms:description",
+        "dcterms:hasPart",
+        "dcmitype:Collection",
+        "prov:Agent",
+        "prov:Activity",
+        "prov:wasAssociatedWith",
+    ):
+        assert term in ontology
+
+
 def test_load_pdf_pages_keeps_page_numbers(monkeypatch, tmp_path) -> None:
     """PDFテキストをページ番号付きで抽出できる。"""
 
@@ -87,40 +129,19 @@ def test_run_scenario_agent_uses_structured_output(monkeypatch) -> None:
         title="manual",
         text="[page 1]\nA clerk checks an order.",
     )
-    expected = ScenarioAgentOutput(
-        scenarios=[
-            BusinessScenario(
-                scenario_id="SCN1",
-                business_name="Order handling",
-                participants=["clerk"],
-                business_goal="Process orders",
-                business_overview="A clerk checks an order.",
-                procedure_steps=[
-                    BusinessProcedureStep(
-                        step_id="S1",
-                        step_name="Check order",
-                        description="A clerk checks an order.",
-                        actor="clerk",
-                        evidence=[
-                            EvidenceSpan(
-                                page_number=1,
-                                text="A clerk checks an order.",
-                            )
-                        ],
-                    )
-                ],
-            )
-        ]
-    )
+    expected = ScenarioAgentOutput(scenario_rdf_turtle=SCENARIO_TTL)
 
     def fake_runner(agent, prompt):
         assert agent.output_type.output_type is ScenarioAgentOutput
         assert "推測しない" in agent.instructions
+        assert "Markdownコードフェンス" in agent.instructions
+        assert "Subjectにはrdf:typeを付与しない" in agent.instructions
+        assert ONTOLOGY_TTL in prompt
         assert "[page 1]" in prompt
         return SimpleNamespace(final_output=expected)
 
     actual = run_scenario_agent(
-        ScenarioAgentInput(document=document),
+        ScenarioAgentInput(document=document, ontology_turtle=ONTOLOGY_TTL),
         model="gpt-test",
         runner=fake_runner,
     )
@@ -136,29 +157,20 @@ def test_run_scenario_agent_requires_api_key(monkeypatch) -> None:
 
     with pytest.raises(MissingOpenAIAPIKeyError, match="OPENAI_API_KEY"):
         run_scenario_agent(
-            ScenarioAgentInput(document=document),
+            ScenarioAgentInput(document=document, ontology_turtle=ONTOLOGY_TTL),
             model="gpt-test",
             runner=lambda *_args: None,
         )
 
 
-def test_save_scenario_output_writes_json(tmp_path) -> None:
-    """シナリオ生成結果をscenario.jsonとして保存できる。"""
+def test_save_scenario_output_writes_turtle(tmp_path) -> None:
+    """Scenario RDFをscenario_final.ttlとして保存できる。"""
 
-    output = ScenarioAgentOutput(
-        scenarios=[
-            BusinessScenario(
-                scenario_id="SCN1",
-                business_name="Order handling",
-                business_goal="Process orders",
-                business_overview="A clerk checks an order.",
-            )
-        ]
-    )
+    output = ScenarioAgentOutput(scenario_rdf_turtle=SCENARIO_TTL)
 
     path = save_scenario_output(output, tmp_path)
 
-    assert path.name == "scenario.json"
+    assert path.name == "scenario_final.ttl"
     assert "Order handling" in path.read_text(encoding="utf-8")
 
 
@@ -172,7 +184,9 @@ def test_format_scenario_prompt_prefers_page_text() -> None:
         pages=[{"page_number": 2, "text": "page text"}],
     )
 
-    prompt = format_scenario_prompt(ScenarioAgentInput(document=document))
+    prompt = format_scenario_prompt(
+        ScenarioAgentInput(document=document, ontology_turtle=ONTOLOGY_TTL)
+    )
 
     assert "[page 2]" in prompt
     assert "page text" in prompt

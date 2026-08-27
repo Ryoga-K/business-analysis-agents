@@ -17,7 +17,6 @@ from business_analysis_agents.fixed_resources import (
 )
 from business_analysis_agents.models import (
     OntologyValidationResult,
-    ScenarioAgentOutput,
     WorkflowAgentMode,
     WorkflowAgentOutput,
     WorkflowRdfValidationResult,
@@ -42,21 +41,22 @@ DEBUG_OUTPUT_FILENAMES = (
 )
 
 
-def load_scenario_output(path: Path | str) -> ScenarioAgentOutput:
-    """Load ScenarioAgentOutput JSON from disk."""
+def load_scenario_rdf(path: Path | str) -> str:
+    """Load Scenario RDF Turtle from disk."""
 
     scenario_path = Path(path)
     if scenario_path.is_dir():
-        scenario_path = scenario_path / "scenario.json"
+        scenario_path = scenario_path / "scenario_final.ttl"
     if not scenario_path.exists():
         raise FileNotFoundError(
-            f"Scenario JSON was not found: {scenario_path}. "
-            "Pass the path to scenario.json, for example "
-            "--scenario outputs/run_YYYYMMDD_HHMMSS/scenario.json"
+            f"Scenario RDF was not found: {scenario_path}. "
+            "Pass the path to scenario_final.ttl, for example "
+            "--scenario outputs/scenario/scenario_final.ttl"
         )
-    return ScenarioAgentOutput.model_validate_json(
-        scenario_path.read_text(encoding="utf-8")
-    )
+    scenario_turtle = scenario_path.read_text(encoding="utf-8")
+    if not scenario_turtle.strip():
+        raise ValueError(f"Scenario RDF is empty: {scenario_path}")
+    return scenario_turtle
 
 
 def write_json(path: Path | str, data: Any) -> None:
@@ -133,7 +133,7 @@ def run_workflow_pipeline(
     scenario_path = Path(scenario_file)
     workflow_dir = Path(output_dir)
     workflow_dir.mkdir(parents=True, exist_ok=True)
-    scenario = load_scenario_output(scenario_path)
+    scenario_turtle = load_scenario_rdf(scenario_path)
     pdf_path = Path(pdf_file)
     source_document = load_pdf_document(pdf_path)
     source_document_payload = source_document.model_dump(
@@ -184,7 +184,7 @@ def run_workflow_pipeline(
     generation_output = run_workflow_agent(
         WorkflowAgentMode.WORKFLOW_GENERATION,
         {
-            "scenario_json": scenario.model_dump(mode="json"),
+            "scenario_rdf_turtle": scenario_turtle,
             "source_document": source_document_payload,
             "ontology_turtle": ontology_turtle,
             "shacl_turtle": shacl_turtle,
@@ -214,7 +214,7 @@ def run_workflow_pipeline(
         revision_output = run_workflow_agent(
             WorkflowAgentMode.WORKFLOW_REVISION,
             {
-                "scenario_json": scenario.model_dump(mode="json"),
+                "scenario_rdf_turtle": scenario_turtle,
                 "source_document": source_document_payload,
                 "ontology_turtle": ontology_turtle,
                 "shacl_turtle": shacl_turtle,
