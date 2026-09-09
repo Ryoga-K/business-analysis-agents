@@ -17,9 +17,8 @@ from business_analysis_agents.agents.data_rule import (
 from business_analysis_agents.data_rule_pipeline import run_data_rule_pipeline
 from business_analysis_agents.fixed_resources import (
     DEFAULT_DATA_ONTOLOGY,
-    DEFAULT_DATA_SHAPES,
     DEFAULT_RULE_ONTOLOGY,
-    DEFAULT_RULE_SHAPES,
+    PROJECT_ROOT,
 )
 from business_analysis_agents.models import (
     DataRuleAgentMode,
@@ -27,6 +26,10 @@ from business_analysis_agents.models import (
 )
 from business_analysis_agents.rdf_validation import validate_ontology_and_shapes, validate_rdf
 from business_analysis_agents.models import RdfKind
+
+
+REFERENCE_DATA_SHAPES = PROJECT_ROOT / "shapes" / "data_shapes.ttl"
+REFERENCE_RULE_SHAPES = PROJECT_ROOT / "shapes" / "rule_shapes.ttl"
 
 
 ONTOLOGY_TTL = """
@@ -161,8 +164,8 @@ inst:submit-application a prov:Activity ;
 """.strip()
 
 
-def test_data_rule_agent_is_single_agent_with_four_modes(monkeypatch) -> None:
-    """Only one related data/rule agent is reused by RDF generation and revision modes."""
+def test_data_rule_agent_is_single_agent_with_six_modes(monkeypatch) -> None:
+    """One related data/rule agent is reused for RDF, SHACL, and revision modes."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     calls: list[str] = []
@@ -185,11 +188,25 @@ def test_data_rule_agent_is_single_agent_with_four_modes(monkeypatch) -> None:
                     data_rdf_turtle=VALID_DATA_TTL,
                 )
             )
+        if "data_shacl_generation" in prompt:
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SHACL_GENERATION,
+                    data_shacl_turtle=DATA_SHAPES_TTL,
+                )
+            )
         if "rule_revision" in prompt:
             return SimpleNamespace(
                 final_output=DataRuleAgentOutput(
                     mode=DataRuleAgentMode.RULE_REVISION,
                     rule_rdf_turtle=VALID_RULE_TTL,
+                )
+            )
+        if "rule_shacl_generation" in prompt:
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.RULE_SHACL_GENERATION,
+                    rule_shacl_turtle=RULE_SHAPES_TTL,
                 )
             )
         return SimpleNamespace(
@@ -209,15 +226,17 @@ def test_data_rule_agent_is_single_agent_with_four_modes(monkeypatch) -> None:
         assert output.mode == mode
 
     assert build_data_rule_agent("gpt-test").name == DATA_RULE_AGENT_NAME
-    assert len(calls) == 4
+    assert len(calls) == 6
 
 
 @pytest.mark.parametrize(
     ("mode", "expected_message"),
     [
         (DataRuleAgentMode.DATA_GENERATION, "data_rdf_turtle"),
+        (DataRuleAgentMode.DATA_SHACL_GENERATION, "data_shacl_turtle"),
         (DataRuleAgentMode.DATA_REVISION, "data_rdf_turtle"),
         (DataRuleAgentMode.RULE_GENERATION, "rule_rdf_turtle"),
+        (DataRuleAgentMode.RULE_SHACL_GENERATION, "rule_shacl_turtle"),
         (DataRuleAgentMode.RULE_REVISION, "rule_rdf_turtle"),
     ],
 )
@@ -285,11 +304,11 @@ def test_default_data_and_rule_shapes_match_fixed_ontologies() -> None:
 
     data_validation = validate_ontology_and_shapes(
         DEFAULT_DATA_ONTOLOGY.read_text(encoding="utf-8"),
-        DEFAULT_DATA_SHAPES.read_text(encoding="utf-8"),
+        REFERENCE_DATA_SHAPES.read_text(encoding="utf-8"),
     )
     rule_validation = validate_ontology_and_shapes(
         DEFAULT_RULE_ONTOLOGY.read_text(encoding="utf-8"),
-        DEFAULT_RULE_SHAPES.read_text(encoding="utf-8"),
+        REFERENCE_RULE_SHAPES.read_text(encoding="utf-8"),
     )
 
     assert data_validation.conforms
@@ -332,13 +351,13 @@ inst:reviewer a prov:Agent ; schema:name "Reviewer" .
     data_validation = validate_rdf(
         data_rdf,
         DEFAULT_DATA_ONTOLOGY.read_text(encoding="utf-8"),
-        DEFAULT_DATA_SHAPES.read_text(encoding="utf-8"),
+        REFERENCE_DATA_SHAPES.read_text(encoding="utf-8"),
         rdf_kind=RdfKind.DATA,
     )
     rule_validation = validate_rdf(
         rule_rdf,
         DEFAULT_RULE_ONTOLOGY.read_text(encoding="utf-8"),
-        DEFAULT_RULE_SHAPES.read_text(encoding="utf-8"),
+        REFERENCE_RULE_SHAPES.read_text(encoding="utf-8"),
         rdf_kind=RdfKind.RULE,
     )
 
@@ -359,7 +378,7 @@ inst:incomplete-rule a prov:Activity ; schema:name "Incomplete rule" .
     validation = validate_rdf(
         rule_rdf,
         DEFAULT_RULE_ONTOLOGY.read_text(encoding="utf-8"),
-        DEFAULT_RULE_SHAPES.read_text(encoding="utf-8"),
+        REFERENCE_RULE_SHAPES.read_text(encoding="utf-8"),
         rdf_kind=RdfKind.RULE,
     )
 
@@ -426,7 +445,7 @@ def _write_source_pdf(tmp_path):
 
 
 def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_path) -> None:
-    """Pipeline saves only final RDF, validation, and revision history."""
+    """Pipeline generates separate SHACL graphs after Data and Rule raw RDF."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario_final.ttl"
@@ -436,6 +455,26 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
     call_order: list[str] = []
 
     def fake_runner(_agent, prompt):
+        if "data_shacl_generation" in prompt:
+            call_order.append("data_shacl_generation")
+            assert "data_rdf_raw" in prompt
+            assert "inst:data-application" in prompt
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SHACL_GENERATION,
+                    data_shacl_turtle=DATA_SHAPES_TTL,
+                )
+            )
+        if "rule_shacl_generation" in prompt:
+            call_order.append("rule_shacl_generation")
+            assert "rule_rdf_raw" in prompt
+            assert "inst:rule-eligibility" in prompt
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.RULE_SHACL_GENERATION,
+                    rule_shacl_turtle=RULE_SHAPES_TTL,
+                )
+            )
         assert "source_document" in prompt
         assert "PDF detail: amount must be at least 1000 JPY." in prompt
         assert "scenario_rdf_turtle" in prompt
@@ -465,17 +504,22 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
         runner=fake_runner,
         data_ontology_file=fixed_files[0],
         rule_ontology_file=fixed_files[1],
-        data_shapes_file=fixed_files[2],
-        rule_shapes_file=fixed_files[3],
     )
 
-    assert call_order == ["data_generation", "rule_generation"]
+    assert call_order == [
+        "data_generation",
+        "data_shacl_generation",
+        "rule_generation",
+        "rule_shacl_generation",
+    ]
     assert result["final_status"] == "completed"
     assert {path.name for path in (tmp_path / "data_rule").iterdir()} == {
         "data_final.ttl",
+        "data_shapes_generated.ttl",
         "data_validation.json",
         "data_revision_history.json",
         "rule_final.ttl",
+        "rule_shapes_generated.ttl",
         "rule_validation.json",
         "rule_revision_history.json",
     }
@@ -491,6 +535,13 @@ def test_pipeline_saves_data_outputs_before_rule_processing(monkeypatch, tmp_pat
     pdf_file = _write_source_pdf(tmp_path)
 
     def fake_runner(_agent, prompt):
+        if "data_shacl_generation" in prompt:
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SHACL_GENERATION,
+                    data_shacl_turtle=DATA_SHAPES_TTL,
+                )
+            )
         assert "source_document" in prompt
         assert "PDF detail: amount must be at least 1000 JPY." in prompt
         if "data_generation" in prompt:
@@ -512,12 +563,11 @@ def test_pipeline_saves_data_outputs_before_rule_processing(monkeypatch, tmp_pat
             runner=fake_runner,
             data_ontology_file=fixed_files[0],
             rule_ontology_file=fixed_files[1],
-            data_shapes_file=fixed_files[2],
-            rule_shapes_file=fixed_files[3],
         )
 
     assert {path.name for path in output_dir.iterdir()} == {
         "data_final.ttl",
+        "data_shapes_generated.ttl",
         "data_validation.json",
         "data_revision_history.json",
     }
@@ -533,15 +583,37 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
     data_revision_calls = 0
     rule_revision_calls = 0
+    data_shacl_calls = 0
+    rule_shacl_calls = 0
 
     def fake_runner(_agent, prompt):
         nonlocal data_revision_calls, rule_revision_calls
+        nonlocal data_shacl_calls, rule_shacl_calls
+        if "data_shacl_generation" in prompt:
+            data_shacl_calls += 1
+            assert "inst:data-application" in prompt
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SHACL_GENERATION,
+                    data_shacl_turtle=DATA_SHAPES_TTL,
+                )
+            )
+        if "rule_shacl_generation" in prompt:
+            rule_shacl_calls += 1
+            assert "inst:rule-eligibility" in prompt
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.RULE_SHACL_GENERATION,
+                    rule_shacl_turtle=RULE_SHAPES_TTL,
+                )
+            )
         assert "source_document" in prompt
         assert "PDF detail: amount must be at least 1000 JPY." in prompt
         assert "scenario_rdf_turtle" in prompt
         assert "Application handling" in prompt
         if "data_revision" in prompt:
             data_revision_calls += 1
+            assert "dr:DataEntityShape" in prompt
             return SimpleNamespace(
                 final_output=DataRuleAgentOutput(
                     mode=DataRuleAgentMode.DATA_REVISION,
@@ -557,6 +629,7 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
             )
         if "rule_revision" in prompt:
             rule_revision_calls += 1
+            assert "dr:BusinessRuleShape" in prompt
             return SimpleNamespace(
                 final_output=DataRuleAgentOutput(
                     mode=DataRuleAgentMode.RULE_REVISION,
@@ -580,13 +653,13 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
         runner=fake_runner,
         data_ontology_file=fixed_files[0],
         rule_ontology_file=fixed_files[1],
-        data_shapes_file=fixed_files[2],
-        rule_shapes_file=fixed_files[3],
     )
 
     assert result["final_status"] == "completed"
     assert data_revision_calls == 1
     assert rule_revision_calls == 1
+    assert data_shacl_calls == 1
+    assert rule_shacl_calls == 1
     assert "inst:data-application a dr:DataEntity" in (
         tmp_path / "data_rule" / "data_final.ttl"
     ).read_text(encoding="utf-8")

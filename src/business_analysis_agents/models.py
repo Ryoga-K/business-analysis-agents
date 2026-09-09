@@ -74,6 +74,7 @@ class WorkflowAgentMode(str, Enum):
     """Workflow Agent internal processing mode."""
 
     WORKFLOW_GENERATION = "workflow_generation"
+    WORKFLOW_SHACL_GENERATION = "workflow_shacl_generation"
     WORKFLOW_REVISION = "workflow_revision"
 
 
@@ -81,8 +82,10 @@ class DataRuleAgentMode(str, Enum):
     """Related data and rule extraction agent internal processing mode."""
 
     DATA_GENERATION = "data_generation"
+    DATA_SHACL_GENERATION = "data_shacl_generation"
     DATA_REVISION = "data_revision"
     RULE_GENERATION = "rule_generation"
+    RULE_SHACL_GENERATION = "rule_shacl_generation"
     RULE_REVISION = "rule_revision"
 
 
@@ -189,15 +192,15 @@ class WorkflowExtractionOutput(StrictBaseModel):
 
 
 class WorkflowAgentOutput(StrictBaseModel):
-    """Structured output for Workflow RDF generation and revision.
+    """Structured output for Workflow RDF and SHACL processing.
 
-    The fixed ontology and SHACL are pipeline inputs and cannot be returned by
-    the agent. RDF syntax, vocabulary, and SHACL validity are checked later by
-    RDFLib and pySHACL.
+    The ontology is fixed. Generated SHACL is fixed by the pipeline before RDF
+    validation and revision.
     """
 
     mode: WorkflowAgentMode
     workflow_rdf_turtle: str | None = None
+    workflow_shacl_turtle: str | None = None
     used_vocabulary_terms: Any = Field(default_factory=list)
     unresolved_items: Any = Field(default_factory=list)
     generation_notes: Any = Field(default_factory=list)
@@ -208,15 +211,17 @@ class WorkflowAgentOutput(StrictBaseModel):
 
 
 class DataRuleAgentOutput(StrictBaseModel):
-    """Structured output for Data/Rule RDF generation and revision.
+    """Structured output for Data/Rule RDF and SHACL processing.
 
-    Fixed ontologies and SHACL are pipeline inputs and cannot be returned by the
-    agent. RDFLib and pySHACL validate the actual RDF content.
+    Ontologies are fixed. Generated SHACL is fixed by the pipeline before RDF
+    validation and revision.
     """
 
     mode: DataRuleAgentMode
     data_rdf_turtle: str | None = None
     rule_rdf_turtle: str | None = None
+    data_shacl_turtle: str | None = None
+    rule_shacl_turtle: str | None = None
     used_vocabulary_terms: Any = Field(default_factory=list)
     unresolved_items: Any = Field(default_factory=list)
     generation_notes: Any = Field(default_factory=list)

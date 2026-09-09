@@ -24,13 +24,14 @@ BASE_WORKFLOW_INSTRUCTIONS = """
 - Scenario RDFにない情報でも、PDF本文に明確に記載され、Workflow RDFに必要であれば抽出してください。
 - Scenario RDFとPDF本文が矛盾する場合は、原則としてPDF本文を根拠とし、矛盾をunresolved_itemsに記録してください。
 - 与えられたOntology TTLを唯一の業務語彙体系として扱ってください。
-- Ontology TTLやSHACL TTLを生成・変更しないでください。
+- Ontology TTLを生成・変更しないでください。
+- SHACL生成モード以外ではSHACL TTLを生成・変更しないでください。
 - PDF本文にもScenario RDFにも書かれていない活動、実行主体、データ、条件、順序、根拠を推測しないでください。
 - 不確実な情報を無理に補完しないでください。不明点はunresolved_itemsに入れてください。
 - すべてのモードでWorkflowAgentOutput Pydanticモデルを使って返してください。
 - 説明用・設計用フィールドは、柔軟なJSON構造で返してかまいません。
 - RDF構文、語彙、SHACL適合性はPydanticではなくRDFLibとpySHACLで検証されます。
-- Workflow RDFは、完全なTurtle文字列としてworkflow_rdf_turtleに出力してください。
+- RDF生成・revisionモードでは、完全なWorkflow RDFをworkflow_rdf_turtleに出力してください。
 - TurtleをMarkdownコードフェンスで囲まないでください。
 - 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
 - 業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
@@ -39,7 +40,7 @@ BASE_WORKFLOW_INSTRUCTIONS = """
 
 WORKFLOW_GENERATION_INSTRUCTIONS = """
 Mode: workflow_generation
-プロンプトで与えられた固定済みのontology_turtleとshacl_turtleを参照してください。
+プロンプトで与えられた固定済みのontology_turtleを参照してください。
 Workflow RDFを完全なTurtle文字列として直接生成してください。
 
 Scenario RDFから業務全体の構造を把握し、PDF本文から業務活動、実行主体、
@@ -56,6 +57,23 @@ Scenario RDFから業務全体の構造を把握し、PDF本文から業務活�
 - 同じ概念エンティティに複数のURIを割り当てないようにしてください。
 - 不明な情報を補完せず、unresolved_itemsに入れてください。
 - workflow_rdf_turtleは必須です。
+""".strip()
+
+WORKFLOW_SHACL_GENERATION_INSTRUCTIONS = """
+Mode: workflow_shacl_generation
+生成済みのworkflow_rdf_rawと固定済みのontology_turtleを入力として、
+Workflow RDFの構造的妥当性を検証するSHACL Shapesを生成してください。
+
+ルール:
+- workflow_shacl_turtleに完全なTurtle文字列を出力してください。
+- TurtleをMarkdownコードフェンスで囲まないでください。
+- SHACL標準語彙と、固定Ontologyに定義されたClass・Propertyだけを使用してください。
+- 固定OntologyのClass、Property、rdfs:domain、rdfs:range、rdfs:subClassOf等を根拠に制約を作成してください。
+- raw RDFに登場する対象クラスを参考にしつつ、単に現在のraw RDFだけを通すための制約にしないでください。
+- 業務インスタンスURIをsh:targetNodeとして列挙するなど、特定のraw RDFへ過剰適合させないでください。
+- 固定Ontologyに根拠のないClass・Property・必須値・カーディナリティを作らないでください。
+- ontology_turtleとworkflow_rdf_rawは変更しないでください。
+- workflow_rdf_turtleは出力しないでください。
 """.strip()
 
 WORKFLOW_REVISION_INSTRUCTIONS = """
@@ -109,6 +127,8 @@ def build_workflow_agent(model: str) -> Agent:
 def _mode_instructions(mode: WorkflowAgentMode) -> str:
     if mode is WorkflowAgentMode.WORKFLOW_GENERATION:
         return WORKFLOW_GENERATION_INSTRUCTIONS
+    if mode is WorkflowAgentMode.WORKFLOW_SHACL_GENERATION:
+        return WORKFLOW_SHACL_GENERATION_INSTRUCTIONS
     return WORKFLOW_REVISION_INSTRUCTIONS
 
 

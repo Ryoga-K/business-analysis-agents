@@ -1,4 +1,4 @@
-"""Pipeline for generating Workflow RDF from scenario JSON."""
+"""Pipeline for generating and validating Workflow RDF."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from business_analysis_agents.agents.workflow import run_workflow_agent
 from business_analysis_agents.document_loader import load_pdf_document
 from business_analysis_agents.fixed_resources import (
     DEFAULT_WORKFLOW_ONTOLOGY,
-    DEFAULT_WORKFLOW_SHAPES,
     load_fixed_turtle,
 )
 from business_analysis_agents.models import (
@@ -107,7 +106,9 @@ def _assert_fixed_hashes(
     if content_hash(ontology_turtle) != ontology_hash:
         raise ValueError("Ontology changed after setup. Workflow revision must not change it.")
     if content_hash(shacl_turtle) != shapes_hash:
-        raise ValueError("SHACL shapes changed after setup. Workflow revision must not change them.")
+        raise ValueError(
+            "SHACL shapes changed after generation. Workflow revision must not change them."
+        )
 
 
 def _remove_debug_outputs(workflow_dir: Path) -> None:
@@ -125,7 +126,6 @@ def run_workflow_pipeline(
     max_workflow_iterations: int = DEFAULT_MAX_WORKFLOW_ITERATIONS,
     runner: Callable[..., Any] | None = None,
     ontology_file: Path | str = DEFAULT_WORKFLOW_ONTOLOGY,
-    shapes_file: Path | str = DEFAULT_WORKFLOW_SHAPES,
     save_debug_outputs: bool = False,
 ) -> dict[str, Any]:
     """Run Workflow RDF generation and save final artifacts."""
@@ -133,6 +133,8 @@ def run_workflow_pipeline(
     scenario_path = Path(scenario_file)
     workflow_dir = Path(output_dir)
     workflow_dir.mkdir(parents=True, exist_ok=True)
+    generated_shapes_path = workflow_dir / "workflow_shapes_generated.ttl"
+    generated_shapes_path.unlink(missing_ok=True)
     scenario_turtle = load_scenario_rdf(scenario_path)
     pdf_path = Path(pdf_file)
     source_document = load_pdf_document(pdf_path)
@@ -145,26 +147,56 @@ def run_workflow_pipeline(
     ontology_path, ontology_turtle = load_fixed_turtle(
         ontology_file, "Workflow ontology"
     )
-    shapes_path, shacl_turtle = load_fixed_turtle(shapes_file, "Workflow SHACL")
+    ontology_hash = content_hash(ontology_turtle)
+
+    generation_output = run_workflow_agent(
+        WorkflowAgentMode.WORKFLOW_GENERATION,
+        {
+            "scenario_rdf_turtle": scenario_turtle,
+            "source_document": source_document_payload,
+            "ontology_turtle": ontology_turtle,
+            "ontology_hash": ontology_hash,
+        },
+        model=model,
+        runner=runner,
+    )
+    workflow_turtle = _require_text(
+        generation_output.workflow_rdf_turtle,
+        "workflow_rdf_turtle",
+    )
+    shacl_output = run_workflow_agent(
+        WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
+        {
+            "workflow_rdf_raw": workflow_turtle,
+            "ontology_turtle": ontology_turtle,
+            "ontology_hash": ontology_hash,
+        },
+        model=model,
+        runner=runner,
+    )
+    shacl_turtle = _require_text(
+        shacl_output.workflow_shacl_turtle,
+        "workflow_shacl_turtle",
+    )
+    write_text(generated_shapes_path, shacl_turtle)
+
     ontology_validation = validate_ontology_and_shapes(ontology_turtle, shacl_turtle)
     if not ontology_validation.conforms:
         raise ValueError(
-            "Fixed Workflow ontology/SHACL validation failed: "
+            "Generated Workflow SHACL validation failed: "
             f"{_ontology_validation_payload(ontology_validation)}"
         )
-
-    ontology_hash = content_hash(ontology_turtle)
     shapes_hash = content_hash(shacl_turtle)
 
     if save_debug_outputs:
         write_text(workflow_dir / "workflow_ontology_v0_1.ttl", ontology_turtle)
-        write_text(workflow_dir / "workflow_shapes_v0_1.ttl", shacl_turtle)
         write_json(
             workflow_dir / "workflow_ontology_design.json",
             {
-                "source": "fixed_ttl",
+                "ontology_source": "fixed_ttl",
                 "ontology_file": str(ontology_path),
-                "shapes_file": str(shapes_path),
+                "shapes_source": "ai_generated",
+                "shapes_file": str(generated_shapes_path),
             },
         )
         write_json(
@@ -174,30 +206,13 @@ def run_workflow_pipeline(
         write_json(
             workflow_dir / "workflow_ontology_history.json",
             {
-                "fixed": True,
-                "source": "fixed_ttl",
+                "ontology_fixed": True,
+                "shapes_fixed_after_generation": True,
                 "ontology_hash": ontology_hash,
                 "shapes_hash": shapes_hash,
             },
         )
 
-    generation_output = run_workflow_agent(
-        WorkflowAgentMode.WORKFLOW_GENERATION,
-        {
-            "scenario_rdf_turtle": scenario_turtle,
-            "source_document": source_document_payload,
-            "ontology_turtle": ontology_turtle,
-            "shacl_turtle": shacl_turtle,
-            "ontology_hash": ontology_hash,
-            "shapes_hash": shapes_hash,
-        },
-        model=model,
-        runner=runner,
-    )
-    workflow_turtle = _require_text(
-        generation_output.workflow_rdf_turtle,
-        "workflow_rdf_turtle",
-    )
     validation = validate_workflow_rdf(
         workflow_turtle,
         ontology_turtle,
@@ -261,7 +276,8 @@ def run_workflow_pipeline(
         "model": model,
         "agent_name": "workflow_agent",
         "ontology_source_file": str(ontology_path),
-        "shapes_source_file": str(shapes_path),
+        "shapes_source": "ai_generated",
+        "generated_shapes_file": str(generated_shapes_path),
         "ontology_hash": ontology_hash,
         "shapes_hash": shapes_hash,
         "max_workflow_iterations": max_workflow_iterations,

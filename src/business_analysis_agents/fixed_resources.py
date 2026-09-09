@@ -10,9 +10,6 @@ DEFAULT_SCENARIO_ONTOLOGY = PROJECT_ROOT / "ontology" / "scenario_ontology.ttl"
 DEFAULT_WORKFLOW_ONTOLOGY = PROJECT_ROOT / "ontology" / "workflow_ontology.ttl"
 DEFAULT_DATA_ONTOLOGY = PROJECT_ROOT / "ontology" / "data_ontology.ttl"
 DEFAULT_RULE_ONTOLOGY = PROJECT_ROOT / "ontology" / "rule_ontology.ttl"
-DEFAULT_WORKFLOW_SHAPES = PROJECT_ROOT / "shapes" / "workflow_shapes.ttl"
-DEFAULT_DATA_SHAPES = PROJECT_ROOT / "shapes" / "data_shapes.ttl"
-DEFAULT_RULE_SHAPES = PROJECT_ROOT / "shapes" / "rule_shapes.ttl"
 
 
 def load_fixed_turtle(path: Path | str, resource_name: str) -> tuple[Path, str]:

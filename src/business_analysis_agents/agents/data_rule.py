@@ -24,7 +24,8 @@ BASE_DATA_RULE_INSTRUCTIONS = """
 - Scenario RDFにない情報でも、PDF本文に明確に記載され、対象RDFに必要であれば抽出してください。
 - Scenario RDFとPDF本文が矛盾する場合は、原則としてPDF本文を根拠とし、矛盾をunresolved_itemsに記録してください。
 - 各処理で与えられたOntology TTLを唯一の業務語彙体系として扱ってください。
-- Ontology TTLやSHACL TTLを生成・変更しないでください。
+- Ontology TTLを生成・変更しないでください。
+- SHACL生成モード以外ではSHACL TTLを生成・変更しないでください。
 - PDF本文にもScenario RDFにも書かれていないデータ、属性、関係、判定条件、結果を推測しないでください。
 - 根拠にはsource_documentのページ番号と本文を使用してください。
 - 不確実または根拠不足の内容はunresolved_itemsに残してください。
@@ -40,7 +41,7 @@ BASE_DATA_RULE_INSTRUCTIONS = """
 
 DATA_GENERATION_INSTRUCTIONS = """
 Mode: data_generation
-プロンプトで与えられた固定済みのontology_turtleとData SHACL shapesだけを使ってください。
+プロンプトで与えられた固定済みのontology_turtleを使ってください。
 Data RDFを完全なTurtle文字列として直接生成してください。
 
 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
@@ -57,6 +58,23 @@ PDF本文にもScenario RDFにも書かれていない汎用的な帳票属性�
 data_rdf_turtleは必須です。
 """.strip()
 
+DATA_SHACL_GENERATION_INSTRUCTIONS = """
+Mode: data_shacl_generation
+生成済みのdata_rdf_rawと固定済みのontology_turtleを入力として、
+Data RDFの構造的妥当性を検証するSHACL Shapesを生成してください。
+
+ルール:
+- data_shacl_turtleに完全なTurtle文字列を出力してください。
+- TurtleをMarkdownコードフェンスで囲まないでください。
+- SHACL標準語彙と、固定Ontologyに定義されたClass・Propertyだけを使用してください。
+- 固定OntologyのClass、Property、rdfs:domain、rdfs:range、rdfs:subClassOf等を根拠に制約を作成してください。
+- raw RDFに登場する対象クラスを参考にしつつ、単に現在のraw RDFだけを通すための制約にしないでください。
+- 業務インスタンスURIをsh:targetNodeとして列挙するなど、特定のraw RDFへ過剰適合させないでください。
+- 固定Ontologyに根拠のないClass・Property・必須値・カーディナリティを作らないでください。
+- ontology_turtleとdata_rdf_rawは変更しないでください。
+- data_rdf_turtleとrule_rdf_turtleは出力しないでください。
+""".strip()
+
 DATA_REVISION_INSTRUCTIONS = """
 Mode: data_revision
 data_rdf_turtleだけを修正してください。
@@ -70,8 +88,8 @@ data_rdf_turtleは必須です。
 
 RULE_GENERATION_INSTRUCTIONS = """
 Mode: rule_generation
-プロンプトで与えられた固定済みのontology_turtle、固定済みのRule SHACL shapes、
-PDF本文、Scenario RDF、検証済みData RDFだけを使ってください。
+プロンプトで与えられた固定済みのontology_turtle、PDF本文、Scenario RDF、
+検証済みData RDFだけを使ってください。
 Rule RDFを完全なTurtle文字列として直接生成してください。
 
 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
@@ -85,6 +103,23 @@ PDF本文にもScenario RDFにも明示されていない数式、
 閾値、AND/OR/NOT構造、形式的な式を作らないでください。
 データを参照する場合は、可能な限り検証済みData RDFで定義されたエンティティを再利用してください。
 rule_rdf_turtleは必須です。
+""".strip()
+
+RULE_SHACL_GENERATION_INSTRUCTIONS = """
+Mode: rule_shacl_generation
+生成済みのrule_rdf_rawと固定済みのontology_turtleを入力として、
+Rule RDFの構造的妥当性を検証するSHACL Shapesを生成してください。
+
+ルール:
+- rule_shacl_turtleに完全なTurtle文字列を出力してください。
+- TurtleをMarkdownコードフェンスで囲まないでください。
+- SHACL標準語彙と、固定Ontologyに定義されたClass・Propertyだけを使用してください。
+- 固定OntologyのClass、Property、rdfs:domain、rdfs:range、rdfs:subClassOf等を根拠に制約を作成してください。
+- raw RDFに登場する対象クラスを参考にしつつ、単に現在のraw RDFだけを通すための制約にしないでください。
+- 業務インスタンスURIをsh:targetNodeとして列挙するなど、特定のraw RDFへ過剰適合させないでください。
+- 固定Ontologyに根拠のないClass・Property・必須値・カーディナリティを作らないでください。
+- ontology_turtleとrule_rdf_rawは変更しないでください。
+- data_rdf_turtleとrule_rdf_turtleは出力しないでください。
 """.strip()
 
 RULE_REVISION_INSTRUCTIONS = """
@@ -129,10 +164,14 @@ def build_data_rule_agent(model: str) -> Agent:
 def _mode_instructions(mode: DataRuleAgentMode) -> str:
     if mode is DataRuleAgentMode.DATA_GENERATION:
         return DATA_GENERATION_INSTRUCTIONS
+    if mode is DataRuleAgentMode.DATA_SHACL_GENERATION:
+        return DATA_SHACL_GENERATION_INSTRUCTIONS
     if mode is DataRuleAgentMode.DATA_REVISION:
         return DATA_REVISION_INSTRUCTIONS
     if mode is DataRuleAgentMode.RULE_GENERATION:
         return RULE_GENERATION_INSTRUCTIONS
+    if mode is DataRuleAgentMode.RULE_SHACL_GENERATION:
+        return RULE_SHACL_GENERATION_INSTRUCTIONS
     return RULE_REVISION_INSTRUCTIONS
 
 

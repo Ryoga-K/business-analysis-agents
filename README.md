@@ -10,11 +10,11 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - 固定Scenario Ontologyを参照したScenario RDFのTurtle直接生成
 - 元PDFとScenario RDFの両方を参照したWorkflow/Data/Rule RDF生成・修正
 - Workflow AgentによるWorkflow RDF生成
-- 固定Workflow ontology / SHACL Shapesを参照したWorkflow RDF生成
+- 固定Workflow ontologyを参照したWorkflow RDF生成とAIによるSHACL Shapes生成
 - Workflow RDFのRDFLib構文検証、語彙検証、pySHACL検証
 - Workflow RDFの修正ループ
 - 関連データ・ルール抽出AgentによるData RDF / Rule RDF生成
-- 固定Data/Rule ontology、Data SHACL、Rule SHACLを参照したRDF生成
+- 固定Data/Rule ontologyを参照したRDF生成とData/Rule別のSHACL Shapes生成
 - Data RDFの生成、検証、修正ループ
 - 検証済みData RDFを参照したRule RDFの生成、検証、修正ループ
 - 実行結果のJSON / Turtle保存
@@ -28,8 +28,9 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - Turtle本文はPydanticでは `str` として受け取り、内容の妥当性はRDFLibとpySHACLで検証する。
 - LLMが生成したWorkflow/Data/Rule RDFをPython側で機械的に補完しない。
 - PDFとScenario RDFのどちらにもない業務内容は推測しない。
-- ontologyとSHACL Shapesは事前定義TTLから読み込み、revisionではRDF本体だけを修正する。
-- ontology / SHACLが存在しない場合は停止し、LLM生成へフォールバックしない。
+- ontologyは事前定義TTLから読み込み、実行中は変更しない。
+- SHACL Shapesは各raw RDFの生成後にAIが1回だけ生成し、ハッシュ固定してrevisionではRDF本体だけを修正する。
+- ontologyが存在しない場合は停止し、LLM生成へフォールバックしない。
 - SQL、DB、Web UIは現時点では使用しない。
 
 ## ディレクトリ構成
@@ -127,14 +128,13 @@ outputs/scenario/scenario_final.ttl
 python -m business_analysis_agents workflow --pdf inputs\sample.pdf --scenario outputs\scenario\scenario_final.ttl
 ```
 
-デフォルト以外のWorkflow ontology / SHACL Shapesを使用する場合:
+デフォルト以外のWorkflow ontologyを使用する場合:
 
 ```powershell
 python -m business_analysis_agents workflow `
   --pdf inputs\sample.pdf `
   --scenario outputs\scenario\scenario_final.ttl `
-  --ontology path\to\workflow_ontology.ttl `
-  --shapes path\to\workflow_shapes.ttl
+  --ontology path\to\workflow_ontology.ttl
 ```
 
 主な出力先:
@@ -146,10 +146,11 @@ outputs/workflow/
 通常実行時の出力ファイル:
 
 - `workflow_final.ttl`
+- `workflow_shapes_generated.ttl`
 - `workflow_validation.json`
 - `workflow_revision_history.json`
 
-固定Ontology/SHACLの検証結果やAgent出力などの詳細ファイルも保存する場合:
+固定Ontology、生成SHACLの検証結果やAgent出力などの詳細ファイルも保存する場合:
 
 ```powershell
 python -m business_analysis_agents workflow `
@@ -171,9 +172,7 @@ python -m business_analysis_agents data-rule `
   --pdf inputs\sample.pdf `
   --scenario outputs\scenario\scenario_final.ttl `
   --data-ontology path\to\data_ontology.ttl `
-  --rule-ontology path\to\rule_ontology.ttl `
-  --data-shapes path\to\data_shapes.ttl `
-  --rule-shapes path\to\rule_shapes.ttl
+  --rule-ontology path\to\rule_ontology.ttl
 ```
 
 主な出力先:
@@ -185,9 +184,11 @@ outputs/data_rule/
 主な出力ファイル:
 
 - `data_final.ttl`
+- `data_shapes_generated.ttl`
 - `data_validation.json`
 - `data_revision_history.json`
 - `rule_final.ttl`
+- `rule_shapes_generated.ttl`
 - `rule_validation.json`
 - `rule_revision_history.json`
 
@@ -207,18 +208,21 @@ PDFから抽出したページ番号付きテキストと固定 `ontology/scenar
 
 ### Workflow Agent
 
-外部的には1つのAIエージェントです。固定Ontology/SHACLを入力し、内部モードで処理を分けます。
+外部的には1つのAIエージェントです。固定Ontologyを入力し、内部モードで処理を分けます。
 
 - `workflow_generation`: PDFとScenario RDFからWorkflow RDFを生成
+- `workflow_shacl_generation`: raw Workflow RDFと固定OntologyからSHACL Shapesを生成
 - `workflow_revision`: PDF、Scenario RDF、検証結果に基づきWorkflow RDFだけを修正
 
 ### 関連データ・ルール抽出Agent
 
-外部的には1つのAIエージェントです。固定Ontology/SHACLを入力し、Data RDFとRule RDFを順番に処理します。
+外部的には1つのAIエージェントです。固定Ontologyを入力し、Data RDFとRule RDFを順番に処理します。
 
 - `data_generation`: PDFとScenario RDFからData RDFを生成
+- `data_shacl_generation`: raw Data RDFと固定Data OntologyからData SHACLを生成
 - `data_revision`: PDF、Scenario RDF、検証結果に基づきData RDFだけを修正
 - `rule_generation`: PDF、Scenario RDF、検証済みData RDFからRule RDFを生成
+- `rule_shacl_generation`: raw Rule RDFと固定Rule OntologyからRule SHACLを生成
 - `rule_revision`: PDF、Scenario RDF、検証結果に基づきRule RDFだけを修正
 
 ## 検証
@@ -226,7 +230,7 @@ PDFから抽出したページ番号付きテキストと固定 `ontology/scenar
 RDFの検証はLLMではなくPython側で行います。
 
 - RDFLib: Turtle構文解析
-- RDFLib: ontology / SHACL Shapesの構文検証
+- RDFLib: 固定ontology / AI生成SHACL Shapesの構文・参照整合性検証
 - RDFLib: 固定Ontologyで宣言されていないClass / Propertyの検出
 - pySHACL: SHACL制約検証
 - Python: 最大反復回数、終了条件、ontology / shapesのハッシュ固定確認
@@ -240,7 +244,7 @@ python -m pytest
 直近の確認結果:
 
 ```text
-45 passed
+48 passed
 ```
 
 ## 未実装

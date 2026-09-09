@@ -23,12 +23,9 @@ from business_analysis_agents.config import load_config_from_env
 from business_analysis_agents.data_rule_pipeline import run_data_rule_pipeline
 from business_analysis_agents.fixed_resources import (
     DEFAULT_DATA_ONTOLOGY,
-    DEFAULT_DATA_SHAPES,
     DEFAULT_RULE_ONTOLOGY,
-    DEFAULT_RULE_SHAPES,
     DEFAULT_SCENARIO_ONTOLOGY,
     DEFAULT_WORKFLOW_ONTOLOGY,
-    DEFAULT_WORKFLOW_SHAPES,
     load_fixed_turtle,
 )
 from business_analysis_agents.document_loader import load_pdf_document
@@ -78,11 +75,6 @@ def build_workflow_parser() -> argparse.ArgumentParser:
         help="Workflow ontology Turtle file.",
     )
     workflow_parser.add_argument(
-        "--shapes",
-        default=str(DEFAULT_WORKFLOW_SHAPES),
-        help="Workflow SHACL shapes Turtle file.",
-    )
-    workflow_parser.add_argument(
         "--max-workflow-iterations",
         type=int,
         default=3,
@@ -129,16 +121,6 @@ def build_data_rule_parser() -> argparse.ArgumentParser:
         help="Rule ontology Turtle file.",
     )
     parser.add_argument(
-        "--data-shapes",
-        default=str(DEFAULT_DATA_SHAPES),
-        help="Data SHACL shapes Turtle file.",
-    )
-    parser.add_argument(
-        "--rule-shapes",
-        default=str(DEFAULT_RULE_SHAPES),
-        help="Rule SHACL shapes Turtle file.",
-    )
-    parser.add_argument(
         "--max-data-iterations",
         type=int,
         default=3,
@@ -170,7 +152,6 @@ def run(argv: Sequence[str] | None = None) -> int:
                 output_dir=args.output_dir,
                 max_workflow_iterations=args.max_workflow_iterations,
                 ontology_file=args.ontology,
-                shapes_file=args.shapes,
                 save_debug_outputs=args.save_debug_outputs,
             )
         except WorkflowMissingOpenAIAPIKeyError as error:
@@ -196,8 +177,6 @@ def run(argv: Sequence[str] | None = None) -> int:
                 max_rule_iterations=args.max_rule_iterations,
                 data_ontology_file=args.data_ontology,
                 rule_ontology_file=args.rule_ontology,
-                data_shapes_file=args.data_shapes,
-                rule_shapes_file=args.rule_shapes,
             )
         except DataRuleMissingOpenAIAPIKeyError as error:
             print(f"エラー: {error}")

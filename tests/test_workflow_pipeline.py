@@ -19,8 +19,8 @@ from business_analysis_agents.models import (
     WorkflowAgentOutput,
 )
 from business_analysis_agents.fixed_resources import (
+    PROJECT_ROOT,
     DEFAULT_WORKFLOW_ONTOLOGY,
-    DEFAULT_WORKFLOW_SHAPES,
 )
 from business_analysis_agents.rdf_validation import (
     content_hash,
@@ -28,6 +28,9 @@ from business_analysis_agents.rdf_validation import (
     validate_workflow_rdf,
 )
 from business_analysis_agents.workflow_pipeline import run_workflow_pipeline
+
+
+REFERENCE_WORKFLOW_SHAPES = PROJECT_ROOT / "shapes" / "workflow_shapes.ttl"
 
 
 ONTOLOGY_TTL = """
@@ -151,8 +154,8 @@ inst:check-order a prov:Activity ;
 """.strip()
 
 
-def test_workflow_agent_is_single_agent_with_two_modes(monkeypatch) -> None:
-    """Only one Workflow Agent is reused for generation and revision."""
+def test_workflow_agent_is_single_agent_with_three_modes(monkeypatch) -> None:
+    """One Workflow Agent handles RDF generation, SHACL generation, and revision."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     calls: list[str] = []
@@ -166,6 +169,13 @@ def test_workflow_agent_is_single_agent_with_two_modes(monkeypatch) -> None:
                 final_output=WorkflowAgentOutput(
                     mode=WorkflowAgentMode.WORKFLOW_GENERATION,
                     workflow_rdf_turtle=VALID_WORKFLOW_TTL,
+                )
+            )
+        if "workflow_shacl_generation" in prompt:
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
+                    workflow_shacl_turtle=SHAPES_TTL,
                 )
             )
         return SimpleNamespace(
@@ -185,7 +195,7 @@ def test_workflow_agent_is_single_agent_with_two_modes(monkeypatch) -> None:
         assert output.mode == mode
 
     assert build_workflow_agent("gpt-test").name == WORKFLOW_AGENT_NAME
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 def test_fixed_ontology_and_shapes_can_be_validated() -> None:
@@ -203,7 +213,7 @@ def test_default_bbo_ontology_and_shapes_are_consistent() -> None:
 
     validation = validate_ontology_and_shapes(
         DEFAULT_WORKFLOW_ONTOLOGY.read_text(encoding="utf-8"),
-        DEFAULT_WORKFLOW_SHAPES.read_text(encoding="utf-8"),
+        REFERENCE_WORKFLOW_SHAPES.read_text(encoding="utf-8"),
     )
 
     assert validation.conforms
@@ -357,13 +367,26 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario_final.ttl"
     scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
-    ontology_file, shapes_file = _write_fixed_files(tmp_path)
+    ontology_file, _ = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
     workflow_dir = tmp_path / "workflow"
     workflow_dir.mkdir()
     (workflow_dir / "workflow_run_metadata.json").write_text("stale", encoding="utf-8")
 
+    call_order: list[str] = []
+
     def fake_runner(_agent, prompt):
+        if "workflow_shacl_generation" in prompt:
+            call_order.append("workflow_shacl_generation")
+            assert "workflow_rdf_raw" in prompt
+            assert "inst:activity-S1" in prompt
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
+                    workflow_shacl_turtle=SHAPES_TTL,
+                )
+            )
+        call_order.append("workflow_generation")
         assert "source_document" in prompt
         assert "PDF detail: a clerk checks the order amount." in prompt
         assert "scenario_rdf_turtle" in prompt
@@ -382,12 +405,13 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
         output_dir=workflow_dir,
         runner=fake_runner,
         ontology_file=ontology_file,
-        shapes_file=shapes_file,
     )
 
+    assert call_order == ["workflow_generation", "workflow_shacl_generation"]
     assert result["final_status"] == "completed"
     assert {path.name for path in workflow_dir.iterdir()} == {
         "workflow_final.ttl",
+        "workflow_shapes_generated.ttl",
         "workflow_validation.json",
         "workflow_revision_history.json",
     }
@@ -399,24 +423,78 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     ) == []
 
 
+def test_pipeline_saves_generated_shacl_before_rejecting_invalid_turtle(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Malformed AI-generated SHACL is preserved and stops RDF validation."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
+    ontology_file, _ = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
+    output_dir = tmp_path / "workflow"
+    invalid_shapes = "@prefix sh: <http://www.w3.org/ns/shacl#> . ["
+
+    def fake_runner(_agent, prompt):
+        if "workflow_shacl_generation" in prompt:
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
+                    workflow_shacl_turtle=invalid_shapes,
+                )
+            )
+        return SimpleNamespace(
+            final_output=WorkflowAgentOutput(
+                mode=WorkflowAgentMode.WORKFLOW_GENERATION,
+                workflow_rdf_turtle=VALID_WORKFLOW_TTL,
+            )
+        )
+
+    with pytest.raises(ValueError, match="Generated Workflow SHACL"):
+        run_workflow_pipeline(
+            scenario_file,
+            model="gpt-test",
+            pdf_file=pdf_file,
+            output_dir=output_dir,
+            runner=fake_runner,
+            ontology_file=ontology_file,
+        )
+
+    assert (output_dir / "workflow_shapes_generated.ttl").read_text(
+        encoding="utf-8"
+    ) == invalid_shapes
+
+
 def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> None:
     """Pipeline stops at max workflow revisions when violations remain."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario_final.ttl"
     scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
-    ontology_file, shapes_file = _write_fixed_files(tmp_path)
+    ontology_file, _ = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
     revision_calls = 0
+    shacl_calls = 0
 
     def fake_runner(_agent, prompt):
-        nonlocal revision_calls
+        nonlocal revision_calls, shacl_calls
+        if "workflow_shacl_generation" in prompt:
+            shacl_calls += 1
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
+                    workflow_shacl_turtle=SHAPES_TTL,
+                )
+            )
         assert "source_document" in prompt
         assert "PDF detail: a clerk checks the order amount." in prompt
         assert "scenario_rdf_turtle" in prompt
         assert "Order handling" in prompt
         if "workflow_revision" in prompt:
             revision_calls += 1
+            assert "wf:ActivityShape" in prompt
             return SimpleNamespace(
                 final_output=WorkflowAgentOutput(
                     mode=WorkflowAgentMode.WORKFLOW_REVISION,
@@ -439,11 +517,11 @@ def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> N
         max_workflow_iterations=2,
         runner=fake_runner,
         ontology_file=ontology_file,
-        shapes_file=shapes_file,
     )
 
     assert result["final_status"] == "needs_review"
     assert revision_calls == 2
+    assert shacl_calls == 1
     workflow_dir = tmp_path / "workflow"
     history = json.loads(
         (workflow_dir / "workflow_revision_history.json").read_text(encoding="utf-8")
@@ -464,10 +542,17 @@ def test_pipeline_saves_detailed_artifacts_in_debug_mode(monkeypatch, tmp_path) 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario_final.ttl"
     scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
-    ontology_file, shapes_file = _write_fixed_files(tmp_path)
+    ontology_file, _ = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
 
-    def fake_runner(_agent, _prompt):
+    def fake_runner(_agent, prompt):
+        if "workflow_shacl_generation" in prompt:
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
+                    workflow_shacl_turtle=SHAPES_TTL,
+                )
+            )
         return SimpleNamespace(
             final_output=WorkflowAgentOutput(
                 mode=WorkflowAgentMode.WORKFLOW_GENERATION,
@@ -482,7 +567,6 @@ def test_pipeline_saves_detailed_artifacts_in_debug_mode(monkeypatch, tmp_path) 
         output_dir=tmp_path / "workflow",
         runner=fake_runner,
         ontology_file=ontology_file,
-        shapes_file=shapes_file,
         save_debug_outputs=True,
     )
 
@@ -491,7 +575,7 @@ def test_pipeline_saves_detailed_artifacts_in_debug_mode(monkeypatch, tmp_path) 
     assert (workflow_dir / "workflow_run_metadata.json").exists()
     assert (workflow_dir / "workflow_ontology_history.json").exists()
     assert (workflow_dir / "workflow_ontology_v0_1.ttl").exists()
-    assert (workflow_dir / "workflow_shapes_v0_1.ttl").exists()
+    assert (workflow_dir / "workflow_shapes_generated.ttl").exists()
 
 
 def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> None:
@@ -500,11 +584,19 @@ def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> N
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario_final.ttl"
     scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
-    ontology_file, shapes_file = _write_fixed_files(tmp_path)
+    ontology_file, _ = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
     generated = "this is not turtle"
 
     def fake_runner(_agent, prompt):
+        if "workflow_shacl_generation" in prompt:
+            assert generated in prompt
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
+                    workflow_shacl_turtle=SHAPES_TTL,
+                )
+            )
         assert "PDF detail: a clerk checks the order amount." in prompt
         return SimpleNamespace(
             final_output=WorkflowAgentOutput(
@@ -521,7 +613,6 @@ def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> N
         max_workflow_iterations=0,
         runner=fake_runner,
         ontology_file=ontology_file,
-        shapes_file=shapes_file,
     )
 
     assert (tmp_path / "workflow" / "workflow_final.ttl").read_text(
@@ -535,7 +626,7 @@ def test_pipeline_stops_when_fixed_ontology_is_missing(monkeypatch, tmp_path) ->
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     scenario_file = tmp_path / "scenario_final.ttl"
     scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
-    _, shapes_file = _write_fixed_files(tmp_path)
+    _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
 
     def unexpected_runner(_agent, _prompt):
@@ -549,5 +640,4 @@ def test_pipeline_stops_when_fixed_ontology_is_missing(monkeypatch, tmp_path) ->
             output_dir=tmp_path / "workflow",
             runner=unexpected_runner,
             ontology_file=tmp_path / "missing.ttl",
-            shapes_file=shapes_file,
         )
