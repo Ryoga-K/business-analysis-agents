@@ -2,7 +2,7 @@
 
 OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Workflow RDF、Data RDF、Rule RDFを生成・検証する研究用プロトタイプです。
 
-現在は、PDFと固定Scenario OntologyからScenario RDFを生成し、Workflow RDF、Data RDF、Rule RDFの生成・個別検証・修正と、3 RDF間のCross Reviewまで実装しています。Web UI、DB保存、人間レビューUIはまだ実装していません。
+現在は、PDFと固定Scenario OntologyからScenario RDFを生成し、Workflow RDF、Data RDF、Rule RDFの生成・個別検証・修正、3 RDF間のCross Reviewまでを1コマンドで実行できます。Web UI、DB保存、人間レビューUIはまだ実装していません。
 
 ## 実装済み
 
@@ -19,6 +19,8 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - 検証済みData RDFを参照したRule RDFの生成、検証、修正ループ
 - AI生成Cross-SHACLによるWorkflow/Data/Rule RDF間の整合性検証
 - Cross-SHACL違反の原因、修正対象Agent、修正指示の構造化出力
+- Python ControllerによるPDFからConsistency評価までのEnd-to-End実行
+- 工程失敗時の後続停止と`run_summary.json`への実行結果保存
 - 実行結果のJSON / Turtle保存
 - APIを呼ばないモックpytest
 
@@ -33,6 +35,8 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - ontologyは事前定義TTLから読み込み、実行中は変更しない。
 - SHACL Shapesは各raw RDFの生成後にAIが1回だけ生成し、ハッシュ固定してrevisionではRDF本体だけを修正する。
 - Cross-SHACLも1回だけ生成・固定し、整合性の適合判定は統合Graphに対するpySHACLで行う。
+- End-to-End ControllerはAI判断を行わず、既存pipelineを決められた順序で呼び出す。
+- Consistencyの不適合は実行エラーとせず、評価結果を保存して正常終了する。
 - ontologyが存在しない場合は停止し、LLM生成へフォールバックしない。
 - SQL、DB、Web UIは現時点では使用しない。
 
@@ -74,6 +78,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
     ├── test_workflow_pipeline.py
     ├── test_data_rule_pipeline.py
     ├── test_consistency_pipeline.py
+    ├── test_end_to_end_controller.py
     └── test_models.py
 ```
 
@@ -111,7 +116,34 @@ python main.py
 システムを開始しました
 ```
 
-### 2. PDFからScenario RDFを生成
+### 2. PDFからConsistency評価までを一括実行
+
+```powershell
+python -m business_analysis_agents run --pdf inputs\sample.pdf
+```
+
+次の順番で既存pipelineを実行します。
+
+```text
+PDF
+ └─ Scenario RDF
+     └─ Workflow RDF + individual validation
+         └─ Data RDF / Rule RDF + individual validation
+             └─ Cross-SHACL validation + Consistency evaluation
+```
+
+主な出力:
+
+- `outputs/scenario/scenario_final.ttl`
+- `outputs/workflow/workflow_final.ttl`
+- `outputs/data_rule/data_final.ttl`
+- `outputs/data_rule/rule_final.ttl`
+- `outputs/consistency/consistency_evaluation.json`
+- `outputs/controller/run_summary.json`
+
+WorkflowまたはData/Ruleの個別検証が未適合の場合と、工程内で例外が発生した場合は後続工程を実行しません。Consistencyが`needs_revision`を返した場合はシステムエラーとせず、修正対象Agentと修正指示を保存して終了します。
+
+### 3. PDFからScenario RDFを生成
 
 ```powershell
 python main.py inputs\sample.pdf
@@ -123,7 +155,7 @@ python main.py inputs\sample.pdf
 outputs/scenario/scenario_final.ttl
 ```
 
-### 3. PDFとScenario RDFからWorkflow RDFを生成
+### 4. PDFとScenario RDFからWorkflow RDFを生成
 
 ```powershell
 python -m business_analysis_agents workflow --pdf inputs\sample.pdf --scenario outputs\scenario\scenario_final.ttl
@@ -160,7 +192,7 @@ python -m business_analysis_agents workflow `
   --save-debug-outputs
 ```
 
-### 4. PDFとScenario RDFからData RDF / Rule RDFを生成
+### 5. PDFとScenario RDFからData RDF / Rule RDFを生成
 
 ```powershell
 python -m business_analysis_agents data-rule --pdf inputs\sample.pdf --scenario outputs\scenario\scenario_final.ttl
@@ -193,7 +225,7 @@ outputs/data_rule/
 - `rule_validation.json`
 - `rule_revision_history.json`
 
-### 5. Workflow / Data / Rule RDF間のCross Reviewを実行
+### 6. Workflow / Data / Rule RDF間のCross Reviewを実行
 
 ```powershell
 python -m business_analysis_agents consistency
@@ -290,7 +322,7 @@ python -m pytest
 直近の確認結果:
 
 ```text
-49 passed
+53 passed
 ```
 
 ## 未実装

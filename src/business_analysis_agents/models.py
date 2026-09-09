@@ -71,6 +71,50 @@ class RunStatus(str, Enum):
     FAILED = "failed"
 
 
+class ControllerStage(str, Enum):
+    """End-to-End Controllerが順番に実行する工程。"""
+
+    SCENARIO = "scenario"
+    WORKFLOW = "workflow"
+    DATA_RULE = "data_rule"
+    CONSISTENCY = "consistency"
+
+
+class ControllerStageStatus(str, Enum):
+    """Controller内の各工程の実行状態。"""
+
+    PENDING = "pending"
+    COMPLETED = "completed"
+    NEEDS_REVIEW = "needs_review"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class ControllerStageResult(StrictBaseModel):
+    """Controllerが記録する1工程分の実行結果。"""
+
+    stage: ControllerStage
+    status: ControllerStageStatus = ControllerStageStatus.PENDING
+    pipeline_status: str | None = None
+    output_files: dict[str, str] = Field(default_factory=dict)
+    error_type: str | None = None
+    error_message: str | None = None
+
+
+class ControllerRunSummary(StrictBaseModel):
+    """PDF入力からConsistency評価までの全体実行結果。"""
+
+    input_pdf: str = Field(min_length=1)
+    started_at: datetime
+    finished_at: datetime | None = None
+    status: RunStatus = RunStatus.RUNNING
+    completed: bool = False
+    failed_stage: ControllerStage | None = None
+    error_message: str | None = None
+    stages: list[ControllerStageResult] = Field(default_factory=list)
+    output_files: dict[str, str] = Field(default_factory=dict)
+
+
 class WorkflowAgentMode(str, Enum):
     """Workflow Agent internal processing mode."""
 
