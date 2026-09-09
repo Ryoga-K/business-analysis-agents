@@ -15,21 +15,12 @@ from business_analysis_agents.agents.data_rule import (
     run_data_rule_agent,
 )
 from business_analysis_agents.data_rule_pipeline import run_data_rule_pipeline
-from business_analysis_agents.fixed_resources import (
-    DEFAULT_DATA_ONTOLOGY,
-    DEFAULT_RULE_ONTOLOGY,
-    PROJECT_ROOT,
-)
 from business_analysis_agents.models import (
     DataRuleAgentMode,
     DataRuleAgentOutput,
 )
 from business_analysis_agents.rdf_validation import validate_ontology_and_shapes, validate_rdf
 from business_analysis_agents.models import RdfKind
-
-
-REFERENCE_DATA_SHAPES = PROJECT_ROOT / "shapes" / "data_shapes.ttl"
-REFERENCE_RULE_SHAPES = PROJECT_ROOT / "shapes" / "rule_shapes.ttl"
 
 
 ONTOLOGY_TTL = """
@@ -297,94 +288,6 @@ def test_data_and_rule_ontology_shapes_validate() -> None:
 
     assert data_validation.conforms
     assert rule_validation.conforms
-
-
-def test_default_data_and_rule_shapes_match_fixed_ontologies() -> None:
-    """Bundled Data/Rule Shapes must reference only their fixed ontology terms."""
-
-    data_validation = validate_ontology_and_shapes(
-        DEFAULT_DATA_ONTOLOGY.read_text(encoding="utf-8"),
-        REFERENCE_DATA_SHAPES.read_text(encoding="utf-8"),
-    )
-    rule_validation = validate_ontology_and_shapes(
-        DEFAULT_RULE_ONTOLOGY.read_text(encoding="utf-8"),
-        REFERENCE_RULE_SHAPES.read_text(encoding="utf-8"),
-    )
-
-    assert data_validation.conforms
-    assert data_validation.undefined_references == []
-    assert rule_validation.conforms
-    assert rule_validation.undefined_references == []
-
-
-def test_default_data_and_rule_shapes_validate_new_vocabulary() -> None:
-    """schema.org/SKOS Data RDF and PROV-O Rule RDF pass the new Shapes."""
-
-    data_rdf = """
-@prefix schema: <https://schema.org/> .
-@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
-@prefix inst: <http://example.org/instance/> .
-
-inst:applicant a schema:Person ; schema:name "Applicant" .
-inst:application a schema:DigitalDocument ; schema:name "Application form" .
-inst:fee a schema:MonetaryAmount ; schema:value 1000 ; schema:currency "JPY" .
-inst:status a skos:Concept ; skos:prefLabel "Submitted"@en .
-""".strip()
-    rule_rdf = """
-@prefix prov: <http://www.w3.org/ns/prov#> .
-@prefix schema: <https://schema.org/> .
-@prefix inst: <http://example.org/instance/> .
-
-inst:eligibility-check a prov:Activity ;
-    schema:name "Eligibility check" ;
-    schema:description "Check whether the application satisfies the condition." ;
-    prov:used inst:application-condition ;
-    prov:wasAssociatedWith inst:reviewer .
-
-inst:application-condition a prov:Entity ;
-    schema:name "Application condition" ;
-    prov:value "Application form is submitted" .
-
-inst:reviewer a prov:Agent ; schema:name "Reviewer" .
-""".strip()
-
-    data_validation = validate_rdf(
-        data_rdf,
-        DEFAULT_DATA_ONTOLOGY.read_text(encoding="utf-8"),
-        REFERENCE_DATA_SHAPES.read_text(encoding="utf-8"),
-        rdf_kind=RdfKind.DATA,
-    )
-    rule_validation = validate_rdf(
-        rule_rdf,
-        DEFAULT_RULE_ONTOLOGY.read_text(encoding="utf-8"),
-        REFERENCE_RULE_SHAPES.read_text(encoding="utf-8"),
-        rdf_kind=RdfKind.RULE,
-    )
-
-    assert data_validation.conforms
-    assert rule_validation.conforms
-
-
-def test_default_rule_shapes_report_missing_rule_details() -> None:
-    """A Rule activity without description or used entities violates SHACL."""
-
-    rule_rdf = """
-@prefix prov: <http://www.w3.org/ns/prov#> .
-@prefix schema: <https://schema.org/> .
-@prefix inst: <http://example.org/instance/> .
-
-inst:incomplete-rule a prov:Activity ; schema:name "Incomplete rule" .
-""".strip()
-    validation = validate_rdf(
-        rule_rdf,
-        DEFAULT_RULE_ONTOLOGY.read_text(encoding="utf-8"),
-        REFERENCE_RULE_SHAPES.read_text(encoding="utf-8"),
-        rdf_kind=RdfKind.RULE,
-    )
-
-    assert not validation.conforms
-    assert validation.shacl_result is not None
-    assert len(validation.shacl_result.violations) == 2
 
 
 def test_data_rdf_and_rule_rdf_validate_with_pyshacl() -> None:

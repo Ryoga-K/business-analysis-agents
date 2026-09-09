@@ -21,6 +21,7 @@ class RdfKind(str, Enum):
     WORKFLOW = "workflow"
     DATA = "data"
     RULE = "rule"
+    CONSISTENCY = "consistency"
 
 
 class AgentName(str, Enum):
@@ -87,6 +88,13 @@ class DataRuleAgentMode(str, Enum):
     RULE_GENERATION = "rule_generation"
     RULE_SHACL_GENERATION = "rule_shacl_generation"
     RULE_REVISION = "rule_revision"
+
+
+class ConsistencyAgentMode(str, Enum):
+    """Consistency Agent internal processing mode."""
+
+    CROSS_SHACL_GENERATION = "cross_shacl_generation"
+    VIOLATION_ANALYSIS = "violation_analysis"
 
 
 class SourceDocument(StrictBaseModel):
@@ -427,23 +435,65 @@ class ShaclValidationResult(StrictBaseModel):
     report_text: str | None = None
 
 
+class CrossRdfValidationResult(StrictBaseModel):
+    """Syntax and Cross-SHACL result for the merged RDF graph."""
+
+    structure_conforms: bool
+    shacl_conforms: bool
+    parse_errors: list[RdfParseError] = Field(default_factory=list)
+    shacl_result: ShaclValidationResult | None = None
+
+    @property
+    def conforms(self) -> bool:
+        """Return True only when parsing and Cross-SHACL validation pass."""
+
+        return self.structure_conforms and self.shacl_conforms
+
+
 class ConsistencyEvaluationInput(StrictBaseModel):
     """整合性評価エージェントに渡す入力。"""
 
-    validation_result: ShaclValidationResult
-    workflow: WorkflowExtractionOutput
-    data: DataExtractionOutput
-    rule: RuleExtractionOutput
+    workflow_rdf_turtle: str = Field(min_length=1)
+    data_rdf_turtle: str = Field(min_length=1)
+    rule_rdf_turtle: str = Field(min_length=1)
+    workflow_ontology_turtle: str = Field(min_length=1)
+    data_ontology_turtle: str = Field(min_length=1)
+    rule_ontology_turtle: str = Field(min_length=1)
+    cross_shacl_turtle: str | None = None
+    validation_result: ShaclValidationResult | None = None
+
+
+class ConsistencyViolationAnalysis(StrictBaseModel):
+    """LLM analysis and repair guidance for one Cross-SHACL violation."""
+
+    violation_index: int = Field(ge=0)
+    target_resource: str = Field(min_length=1)
+    cause: str = Field(min_length=1)
+    target_agent: AgentName
+    repair_instruction: str = Field(min_length=1)
+
+
+class ConsistencyAgentOutput(StrictBaseModel):
+    """Structured output for Cross-SHACL generation or violation analysis."""
+
+    mode: ConsistencyAgentMode
+    cross_shacl_turtle: str | None = None
+    violation_analyses: list[ConsistencyViolationAnalysis] = Field(default_factory=list)
+    summary: str | None = None
 
 
 class ConsistencyEvaluationResult(StrictBaseModel):
     """RDF間の不整合に対する評価結果。"""
 
     status: ReviewStatus
+    conforms: bool = False
     can_auto_repair: bool
     target_agent: AgentName | None = None
     reason: str = Field(min_length=1)
     related_violation_indices: list[int] = Field(default_factory=list)
+    violations: list[ShaclViolation] = Field(default_factory=list)
+    violation_analyses: list[ConsistencyViolationAnalysis] = Field(default_factory=list)
+    cross_shapes_hash: str | None = None
 
 
 class ConsistencyEvaluationOutput(ConsistencyEvaluationResult):

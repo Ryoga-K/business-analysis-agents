@@ -2,7 +2,7 @@
 
 OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Workflow RDF、Data RDF、Rule RDFを生成・検証する研究用プロトタイプです。
 
-現在は、PDFと固定Scenario OntologyからScenario RDFを生成し、元PDFとScenario RDFの両方を入力としてWorkflow RDF、Data RDF、Rule RDFを生成・検証・修正する最小パイプラインまで実装しています。Web UI、DB保存、人間レビューUI、RDF間Cross Reviewはまだ実装していません。
+現在は、PDFと固定Scenario OntologyからScenario RDFを生成し、Workflow RDF、Data RDF、Rule RDFの生成・個別検証・修正と、3 RDF間のCross Reviewまで実装しています。Web UI、DB保存、人間レビューUIはまだ実装していません。
 
 ## 実装済み
 
@@ -17,6 +17,8 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - 固定Data/Rule ontologyを参照したRDF生成とData/Rule別のSHACL Shapes生成
 - Data RDFの生成、検証、修正ループ
 - 検証済みData RDFを参照したRule RDFの生成、検証、修正ループ
+- AI生成Cross-SHACLによるWorkflow/Data/Rule RDF間の整合性検証
+- Cross-SHACL違反の原因、修正対象Agent、修正指示の構造化出力
 - 実行結果のJSON / Turtle保存
 - APIを呼ばないモックpytest
 
@@ -30,6 +32,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - PDFとScenario RDFのどちらにもない業務内容は推測しない。
 - ontologyは事前定義TTLから読み込み、実行中は変更しない。
 - SHACL Shapesは各raw RDFの生成後にAIが1回だけ生成し、ハッシュ固定してrevisionではRDF本体だけを修正する。
+- Cross-SHACLも1回だけ生成・固定し、整合性の適合判定は統合Graphに対するpySHACLで行う。
 - ontologyが存在しない場合は停止し、LLM生成へフォールバックしない。
 - SQL、DB、Web UIは現時点では使用しない。
 
@@ -46,10 +49,6 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 │   ├── workflow_ontology.ttl
 │   ├── data_ontology.ttl
 │   └── rule_ontology.ttl
-├── shapes/
-│   ├── workflow_shapes.ttl
-│   ├── data_shapes.ttl
-│   └── rule_shapes.ttl
 ├── src/
 │   └── business_analysis_agents/
 │       ├── __main__.py
@@ -65,6 +64,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 │       ├── rdf_validation.py
 │       ├── workflow_pipeline.py
 │       ├── data_rule_pipeline.py
+│       ├── consistency_pipeline.py
 │       ├── rdf/
 │       ├── shacl/
 │       └── review/
@@ -73,6 +73,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
     ├── test_scenario_generation.py
     ├── test_workflow_pipeline.py
     ├── test_data_rule_pipeline.py
+    ├── test_consistency_pipeline.py
     └── test_models.py
 ```
 
@@ -192,6 +193,41 @@ outputs/data_rule/
 - `rule_validation.json`
 - `rule_revision_history.json`
 
+### 5. Workflow / Data / Rule RDF間のCross Reviewを実行
+
+```powershell
+python -m business_analysis_agents consistency
+```
+
+デフォルトでは、次の検証済みRDFを読み込みます。
+
+- `outputs/workflow/workflow_final.ttl`
+- `outputs/data_rule/data_final.ttl`
+- `outputs/data_rule/rule_final.ttl`
+
+対応する`workflow_validation.json`、`data_validation.json`、`rule_validation.json`の`conforms=true`も実行前に確認します。
+
+主な出力ファイル:
+
+- `outputs/consistency/consistency_shapes_generated.ttl`
+- `outputs/consistency/consistency_validation.json`
+- `outputs/consistency/consistency_evaluation.json`
+
+入力RDFやOntologyを変更する場合:
+
+```powershell
+python -m business_analysis_agents consistency `
+  --workflow path\to\workflow_final.ttl `
+  --data path\to\data_final.ttl `
+  --rule path\to\rule_final.ttl `
+  --workflow-validation path\to\workflow_validation.json `
+  --data-validation path\to\data_validation.json `
+  --rule-validation path\to\rule_validation.json `
+  --workflow-ontology path\to\workflow_ontology.ttl `
+  --data-ontology path\to\data_ontology.ttl `
+  --rule-ontology path\to\rule_ontology.ttl
+```
+
 ## エージェント構成
 
 ### Scenario Agent
@@ -225,6 +261,15 @@ PDFから抽出したページ番号付きテキストと固定 `ontology/scenar
 - `rule_shacl_generation`: raw Rule RDFと固定Rule OntologyからRule SHACLを生成
 - `rule_revision`: PDF、Scenario RDF、検証結果に基づきRule RDFだけを修正
 
+### Consistency Agent
+
+Workflow/Data/Rule RDFと3つの固定Ontologyを入力し、次の2モードで処理します。
+
+- `cross_shacl_generation`: 明示されたRDF間参照・型・URI整合性を検証するCross-SHACLを生成
+- `violation_analysis`: pySHACL違反の原因、修正対象Agent、RDF修正指示を構造化
+
+RDFLibで3 RDFと3 Ontologyをそれぞれ統合してpySHACL検証します。現在の固定Ontologyと生成済みRDFには3 RDF間の直接URI参照がないため、名称類似だけを根拠とした対応付けは行いません。Consistency Agentは修正指示までを出力し、抽出Agentの自動再実行は行いません。
+
 ## 検証
 
 RDFの検証はLLMではなくPython側で行います。
@@ -233,6 +278,7 @@ RDFの検証はLLMではなくPython側で行います。
 - RDFLib: 固定ontology / AI生成SHACL Shapesの構文・参照整合性検証
 - RDFLib: 固定Ontologyで宣言されていないClass / Propertyの検出
 - pySHACL: SHACL制約検証
+- pySHACL: 3 RDF統合Graphに対するCross-SHACL検証
 - Python: 最大反復回数、終了条件、ontology / shapesのハッシュ固定確認
 
 通常のpytestでは実APIを呼びません。
@@ -244,13 +290,13 @@ python -m pytest
 直近の確認結果:
 
 ```text
-48 passed
+49 passed
 ```
 
 ## 未実装
 
-- Workflow RDF / Data RDF / Rule RDF間のCross Review
-- 3種類RDF全体の整合性評価エージェント
+- Consistency Agentから抽出Agentを自動再実行する修正ループ
+- Consistency AgentのSelf-Review
 - 人間レビューUI
 - 人間への問い合わせ生成UI
 - DB保存

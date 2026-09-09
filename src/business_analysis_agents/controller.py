@@ -16,10 +16,22 @@ from business_analysis_agents.agents.scenario import (
 from business_analysis_agents.agents.data_rule import (
     MissingOpenAIAPIKeyError as DataRuleMissingOpenAIAPIKeyError,
 )
+from business_analysis_agents.agents.consistency import (
+    MissingOpenAIAPIKeyError as ConsistencyMissingOpenAIAPIKeyError,
+)
 from business_analysis_agents.agents.workflow import (
     MissingOpenAIAPIKeyError as WorkflowMissingOpenAIAPIKeyError,
 )
 from business_analysis_agents.config import load_config_from_env
+from business_analysis_agents.consistency_pipeline import (
+    DEFAULT_DATA_RDF,
+    DEFAULT_DATA_VALIDATION,
+    DEFAULT_RULE_RDF,
+    DEFAULT_RULE_VALIDATION,
+    DEFAULT_WORKFLOW_RDF,
+    DEFAULT_WORKFLOW_VALIDATION,
+    run_consistency_pipeline,
+)
 from business_analysis_agents.data_rule_pipeline import run_data_rule_pipeline
 from business_analysis_agents.fixed_resources import (
     DEFAULT_DATA_ONTOLOGY,
@@ -135,6 +147,32 @@ def build_data_rule_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_consistency_parser() -> argparse.ArgumentParser:
+    """Create the Cross Review subcommand parser."""
+
+    parser = argparse.ArgumentParser(
+        prog="python -m business_analysis_agents consistency",
+        description="Cross-validate Workflow, Data, and Rule RDF.",
+    )
+    parser.add_argument("--workflow", default=str(DEFAULT_WORKFLOW_RDF))
+    parser.add_argument("--data", default=str(DEFAULT_DATA_RDF))
+    parser.add_argument("--rule", default=str(DEFAULT_RULE_RDF))
+    parser.add_argument(
+        "--workflow-validation",
+        default=str(DEFAULT_WORKFLOW_VALIDATION),
+    )
+    parser.add_argument("--data-validation", default=str(DEFAULT_DATA_VALIDATION))
+    parser.add_argument("--rule-validation", default=str(DEFAULT_RULE_VALIDATION))
+    parser.add_argument("--output-dir", default="outputs/consistency")
+    parser.add_argument(
+        "--workflow-ontology",
+        default=str(DEFAULT_WORKFLOW_ONTOLOGY),
+    )
+    parser.add_argument("--data-ontology", default=str(DEFAULT_DATA_ONTOLOGY))
+    parser.add_argument("--rule-ontology", default=str(DEFAULT_RULE_ONTOLOGY))
+    return parser
+
+
 def run(argv: Sequence[str] | None = None) -> int:
     """プロトタイプを起動し、必要に応じてPDFからシナリオを生成する。"""
 
@@ -185,6 +223,33 @@ def run(argv: Sequence[str] | None = None) -> int:
             print(f"エラー: {error}")
             return 1
         print("Data RDF / Rule RDF生成を完了しました")
+        print(f"出力先: {result['output_dir']}")
+        print(f"最終状態: {result['final_status']}")
+        return 0
+
+    if raw_args[:1] == ["consistency"]:
+        args = build_consistency_parser().parse_args(raw_args[1:])
+        try:
+            result = run_consistency_pipeline(
+                model=config.openai_model,
+                workflow_file=args.workflow,
+                data_file=args.data,
+                rule_file=args.rule,
+                workflow_validation_file=args.workflow_validation,
+                data_validation_file=args.data_validation,
+                rule_validation_file=args.rule_validation,
+                output_dir=args.output_dir,
+                workflow_ontology_file=args.workflow_ontology,
+                data_ontology_file=args.data_ontology,
+                rule_ontology_file=args.rule_ontology,
+            )
+        except ConsistencyMissingOpenAIAPIKeyError as error:
+            print(f"エラー: {error}")
+            return 1
+        except (FileNotFoundError, PermissionError, ValueError) as error:
+            print(f"エラー: {error}")
+            return 1
+        print("Cross Reviewを完了しました")
         print(f"出力先: {result['output_dir']}")
         print(f"最終状態: {result['final_status']}")
         return 0

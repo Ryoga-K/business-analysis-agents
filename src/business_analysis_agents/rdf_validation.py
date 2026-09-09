@@ -9,6 +9,7 @@ from pyshacl import validate as pyshacl_validate
 from rdflib import Graph, OWL, RDF, RDFS, SH, URIRef
 
 from business_analysis_agents.models import (
+    CrossRdfValidationResult,
     OntologyValidationResult,
     RdfKind,
     RdfParseError,
@@ -161,6 +162,8 @@ def run_pyshacl(
     ontology_graph: Graph,
     shapes_graph: Graph,
     rdf_kind: RdfKind = RdfKind.WORKFLOW,
+    advanced: bool = False,
+    inference: str = "rdfs",
 ) -> ShaclValidationResult:
     """Validate RDF data with pySHACL."""
 
@@ -168,8 +171,9 @@ def run_pyshacl(
         data_graph,
         shacl_graph=shapes_graph,
         ont_graph=ontology_graph,
-        inference="rdfs",
+        inference=inference,
         abort_on_first=False,
+        advanced=advanced,
     )
     return ShaclValidationResult(
         conforms=bool(conforms),
@@ -310,6 +314,94 @@ def validate_workflow_rdf(
         shacl_turtle,
         iteration=iteration,
         rdf_kind=RdfKind.WORKFLOW,
+    )
+
+
+def validate_cross_rdf(
+    workflow_turtle: str,
+    data_turtle: str,
+    rule_turtle: str,
+    workflow_ontology_turtle: str,
+    data_ontology_turtle: str,
+    rule_ontology_turtle: str,
+    cross_shacl_turtle: str,
+) -> CrossRdfValidationResult:
+    """Merge three RDF graphs and validate their relationships with Cross-SHACL."""
+
+    rdf_inputs = (
+        ("Workflow RDF", workflow_turtle),
+        ("Data RDF", data_turtle),
+        ("Rule RDF", rule_turtle),
+    )
+    ontology_inputs = (
+        ("Workflow ontology", workflow_ontology_turtle),
+        ("Data ontology", data_ontology_turtle),
+        ("Rule ontology", rule_ontology_turtle),
+    )
+    rdf_graphs: list[Graph] = []
+    ontology_graphs: list[Graph] = []
+    parse_errors: list[RdfParseError] = []
+
+    for label, turtle in rdf_inputs:
+        graph, errors = parse_turtle(turtle)
+        if graph is not None:
+            rdf_graphs.append(graph)
+        parse_errors.extend(
+            error.model_copy(
+                update={"error_message": f"{label}: {error.error_message}"}
+            )
+            for error in errors
+        )
+
+    for label, turtle in ontology_inputs:
+        graph, errors = parse_turtle(turtle)
+        if graph is not None:
+            ontology_graphs.append(graph)
+        parse_errors.extend(
+            error.model_copy(
+                update={"error_message": f"{label}: {error.error_message}"}
+            )
+            for error in errors
+        )
+
+    shapes_graph, shape_errors = parse_turtle(cross_shacl_turtle)
+    parse_errors.extend(
+        error.model_copy(
+            update={"error_message": f"Cross-SHACL: {error.error_message}"}
+        )
+        for error in shape_errors
+    )
+    if (
+        len(rdf_graphs) != len(rdf_inputs)
+        or len(ontology_graphs) != len(ontology_inputs)
+        or shapes_graph is None
+    ):
+        return CrossRdfValidationResult(
+            structure_conforms=False,
+            shacl_conforms=False,
+            parse_errors=parse_errors,
+        )
+
+    merged_rdf = Graph()
+    for graph in rdf_graphs:
+        merged_rdf += graph
+    merged_ontology = Graph()
+    for graph in ontology_graphs:
+        merged_ontology += graph
+
+    shacl_result = run_pyshacl(
+        merged_rdf,
+        merged_ontology,
+        shapes_graph,
+        rdf_kind=RdfKind.CONSISTENCY,
+        advanced=True,
+        inference="none",
+    )
+    return CrossRdfValidationResult(
+        structure_conforms=True,
+        shacl_conforms=shacl_result.conforms,
+        parse_errors=parse_errors,
+        shacl_result=shacl_result,
     )
 
 

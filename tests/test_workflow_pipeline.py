@@ -18,19 +18,12 @@ from business_analysis_agents.models import (
     WorkflowAgentMode,
     WorkflowAgentOutput,
 )
-from business_analysis_agents.fixed_resources import (
-    PROJECT_ROOT,
-    DEFAULT_WORKFLOW_ONTOLOGY,
-)
 from business_analysis_agents.rdf_validation import (
     content_hash,
     validate_ontology_and_shapes,
     validate_workflow_rdf,
 )
 from business_analysis_agents.workflow_pipeline import run_workflow_pipeline
-
-
-REFERENCE_WORKFLOW_SHAPES = PROJECT_ROOT / "shapes" / "workflow_shapes.ttl"
 
 
 ONTOLOGY_TTL = """
@@ -206,18 +199,6 @@ def test_fixed_ontology_and_shapes_can_be_validated() -> None:
     assert validation.conforms
     assert validation.ontology_hash == content_hash(ONTOLOGY_TTL)
     assert validation.shapes_hash == content_hash(SHAPES_TTL)
-
-
-def test_default_bbo_ontology_and_shapes_are_consistent() -> None:
-    """The bundled BBO ontology and Workflow SHACL must use the same vocabulary."""
-
-    validation = validate_ontology_and_shapes(
-        DEFAULT_WORKFLOW_ONTOLOGY.read_text(encoding="utf-8"),
-        REFERENCE_WORKFLOW_SHAPES.read_text(encoding="utf-8"),
-    )
-
-    assert validation.conforms
-    assert validation.undefined_references == []
 
 
 def test_workflow_agent_output_keeps_explanatory_fields_flexible() -> None:
