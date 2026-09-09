@@ -143,6 +143,10 @@ def _shacl_violations(report_graph: Graph, rdf_kind: RdfKind) -> list[ShaclViola
         focus_node = next(report_graph.objects(result, SH.focusNode), None)
         path = next(report_graph.objects(result, SH.resultPath), None)
         source_shape = next(report_graph.objects(result, SH.sourceShape), None)
+        constraint_component = next(
+            report_graph.objects(result, SH.sourceConstraintComponent),
+            None,
+        )
         severity = next(report_graph.objects(result, SH.resultSeverity), None)
         violations.append(
             ShaclViolation(
@@ -150,6 +154,9 @@ def _shacl_violations(report_graph: Graph, rdf_kind: RdfKind) -> list[ShaclViola
                 message=str(message or "SHACL violation"),
                 path=str(path) if path else None,
                 source_shape=str(source_shape) if source_shape else None,
+                constraint_component=(
+                    str(constraint_component) if constraint_component else None
+                ),
                 severity=Severity.ERROR if severity != SH.Warning else Severity.WARNING,
                 rdf_kind=rdf_kind,
             )

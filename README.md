@@ -2,7 +2,7 @@
 
 OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Workflow RDF、Data RDF、Rule RDFを生成・検証する研究用プロトタイプです。
 
-現在は、PDFと固定Scenario OntologyからScenario RDFを生成し、Workflow RDF、Data RDF、Rule RDFの生成・個別検証・修正、3 RDF間のCross Reviewまでを1コマンドで実行できます。Web UI、DB保存、人間レビューUIはまだ実装していません。
+現在は、PDFと固定Scenario OntologyからScenario RDFを生成し、Workflow RDF、Data RDF、Rule RDFの生成・個別検証・修正、3 RDF間のCross Review、対話式Human Reviewまでを1コマンドで実行できます。Web UIとDB保存はまだ実装していません。
 
 ## 実装済み
 
@@ -21,6 +21,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - Cross-SHACL違反の原因、修正対象Agent、修正指示の構造化出力
 - Python ControllerによるPDFからConsistency評価までのEnd-to-End実行
 - 工程失敗時の後続停止と`run_summary.json`への実行結果保存
+- SHACL構造に基づくConsistency findingのグループレビューと構造化結果保存
 - 実行結果のJSON / Turtle保存
 - APIを呼ばないモックpytest
 
@@ -37,6 +38,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - Cross-SHACLも1回だけ生成・固定し、整合性の適合判定は統合Graphに対するpySHACLで行う。
 - End-to-End ControllerはAI判断を行わず、既存pipelineを決められた順序で呼び出す。
 - Consistencyの不適合は実行エラーとせず、評価結果を保存して正常終了する。
+- Human ReviewはRDFやAgentを再実行せず、人間の判断と補足情報だけを保存する。
 - ontologyが存在しない場合は停止し、LLM生成へフォールバックしない。
 - SQL、DB、Web UIは現時点では使用しない。
 
@@ -79,6 +81,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
     ├── test_data_rule_pipeline.py
     ├── test_consistency_pipeline.py
     ├── test_end_to_end_controller.py
+    ├── test_human_review.py
     └── test_models.py
 ```
 
@@ -116,7 +119,7 @@ python main.py
 システムを開始しました
 ```
 
-### 2. PDFからConsistency評価までを一括実行
+### 2. PDFからHuman Reviewまでを一括実行
 
 ```powershell
 python -m business_analysis_agents run --pdf inputs\sample.pdf
@@ -130,6 +133,7 @@ PDF
      └─ Workflow RDF + individual validation
          └─ Data RDF / Rule RDF + individual validation
              └─ Cross-SHACL validation + Consistency evaluation
+                 └─ Human Review
 ```
 
 主な出力:
@@ -139,9 +143,10 @@ PDF
 - `outputs/data_rule/data_final.ttl`
 - `outputs/data_rule/rule_final.ttl`
 - `outputs/consistency/consistency_evaluation.json`
+- `outputs/human_review/human_review.json`
 - `outputs/controller/run_summary.json`
 
-WorkflowまたはData/Ruleの個別検証が未適合の場合と、工程内で例外が発生した場合は後続工程を実行しません。Consistencyが`needs_revision`を返した場合はシステムエラーとせず、修正対象Agentと修正指示を保存して終了します。
+WorkflowまたはData/Ruleの個別検証が未適合の場合と、工程内で例外が発生した場合は後続工程を実行しません。Consistencyが`needs_revision`を返した場合もHuman Reviewへ進みます。findingや人間の判断内容はシステムエラーとせず、Human Reviewの入出力処理が失敗した場合だけ全体を失敗とします。
 
 ### 3. PDFからScenario RDFを生成
 
@@ -260,6 +265,34 @@ python -m business_analysis_agents consistency `
   --rule-ontology path\to\rule_ontology.ttl
 ```
 
+### 7. Consistency findingをHuman Reviewする
+
+```powershell
+python -m business_analysis_agents human-review
+```
+
+デフォルトでは既存のWorkflow/Data/Rule RDFと`outputs/consistency/consistency_evaluation.json`を読み込みます。findingは修正対象Agent、`resultPath`、SHACL constraint component、source shape、severityの組み合わせでグループ化します。自然言語の文章類似度は使用しません。
+
+各グループについて、一括で指摘を承認、現在のRDFを承認、補足情報を入力、個別に確認、保留から選択します。個別確認を選んだ場合だけ、従来どおりグループ内のfindingを1件ずつ表示します。
+
+出力:
+
+```text
+outputs/human_review/human_review.json
+```
+
+入力・出力を変更する場合:
+
+```powershell
+python -m business_analysis_agents human-review `
+  --workflow path\to\workflow_final.ttl `
+  --data path\to\data_final.ttl `
+  --rule path\to\rule_final.ttl `
+  --consistency-evaluation path\to\consistency_evaluation.json `
+  --output path\to\human_review.json `
+  --reviewer reviewer-name
+```
+
 ## エージェント構成
 
 ### Scenario Agent
@@ -302,6 +335,12 @@ Workflow/Data/Rule RDFと3つの固定Ontologyを入力し、次の2モードで
 
 RDFLibで3 RDFと3 Ontologyをそれぞれ統合してpySHACL検証します。現在の固定Ontologyと生成済みRDFには3 RDF間の直接URI参照がないため、名称類似だけを根拠とした対応付けは行いません。Consistency Agentは修正指示までを出力し、抽出Agentの自動再実行は行いません。
 
+### Human Review
+
+Human ReviewはAI Agentではなく対話式CLIです。Consistencyのviolationと解析結果を`violation_index`で対応付けた後、SHACLの構造化情報でグループ化します。Consistencyが適合している場合は入力を求めず、「確認事項なし」として正常終了します。
+
+`human_review.json`の`groups`には、グループキー、finding ID一覧、違反タイプ、対象Agent、共通原因、共通修正方針、対象リソース、グループ判断、元finding一覧を保存します。個別確認した場合だけ`individual_results`に個別判断を保存します。トップレベルの`findings`には一括判断を展開した結果も含め、将来の修正ループからfinding単位で利用できるようにしています。
+
 ## 検証
 
 RDFの検証はLLMではなくPython側で行います。
@@ -322,14 +361,14 @@ python -m pytest
 直近の確認結果:
 
 ```text
-53 passed
+60 passed
 ```
 
 ## 未実装
 
 - Consistency Agentから抽出Agentを自動再実行する修正ループ
 - Consistency AgentのSelf-Review
-- 人間レビューUI
+- Human Review Web UI
 - 人間への問い合わせ生成UI
 - DB保存
 - BBO等を利用した本番用Workflow ontologyへの差し替え

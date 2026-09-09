@@ -54,6 +54,15 @@ from business_analysis_agents.models import (
     RunStatus,
     ScenarioAgentInput,
 )
+from business_analysis_agents.review.cli import (
+    DEFAULT_CONSISTENCY_EVALUATION as DEFAULT_REVIEW_CONSISTENCY_EVALUATION,
+    DEFAULT_DATA_RDF as DEFAULT_REVIEW_DATA_RDF,
+    DEFAULT_HUMAN_REVIEW_OUTPUT,
+    DEFAULT_RULE_RDF as DEFAULT_REVIEW_RULE_RDF,
+    DEFAULT_WORKFLOW_RDF as DEFAULT_REVIEW_WORKFLOW_RDF,
+    HumanReviewInputError,
+    run_human_review,
+)
 from business_analysis_agents.workflow_pipeline import (
     DEFAULT_MAX_WORKFLOW_ITERATIONS,
     run_workflow_pipeline,
@@ -140,8 +149,9 @@ def run_end_to_end_controller(
     max_workflow_iterations: int = DEFAULT_MAX_WORKFLOW_ITERATIONS,
     max_data_iterations: int = DEFAULT_MAX_DATA_ITERATIONS,
     max_rule_iterations: int = DEFAULT_MAX_RULE_ITERATIONS,
+    reviewer: str | None = None,
 ) -> ControllerRunSummary:
-    """Run Scenario, Workflow, Data/Rule, and Consistency in sequence."""
+    """Run Scenario through Human Review in sequence."""
 
     root = Path(output_dir)
     scenario_dir = root / "scenario"
@@ -156,6 +166,7 @@ def run_end_to_end_controller(
             ControllerStage.WORKFLOW,
             ControllerStage.DATA_RULE,
             ControllerStage.CONSISTENCY,
+            ControllerStage.HUMAN_REVIEW,
         )
     ]
     summary = ControllerRunSummary(
@@ -323,6 +334,35 @@ def run_end_to_end_controller(
         if consistency_status == "completed"
         else ControllerStageStatus.NEEDS_REVIEW
     )
+    _save_controller_summary(summary, summary_path)
+
+    human_review_stage = _stage_result(summary, ControllerStage.HUMAN_REVIEW)
+    human_review_file = root / "human_review" / "human_review.json"
+    try:
+        human_review = run_human_review(
+            workflow_file=workflow_dir / "workflow_final.ttl",
+            data_file=data_rule_dir / "data_final.ttl",
+            rule_file=data_rule_dir / "rule_final.ttl",
+            consistency_evaluation_file=(
+                consistency_dir / "consistency_evaluation.json"
+            ),
+            output_file=human_review_file,
+            reviewer=reviewer,
+        )
+    except Exception as error:
+        return _finish_failed_run(
+            summary,
+            summary_path,
+            ControllerStage.HUMAN_REVIEW,
+            type(error).__name__,
+            str(error),
+        )
+    human_review_stage.status = ControllerStageStatus.COMPLETED
+    human_review_stage.pipeline_status = human_review.status.value
+    human_review_stage.output_files = {
+        "human_review": str(human_review_file),
+    }
+    summary.output_files.update(human_review_stage.output_files)
     summary.status = RunStatus.COMPLETED
     summary.completed = True
     summary.finished_at = datetime.now().astimezone()
@@ -458,12 +498,31 @@ def build_consistency_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_human_review_parser() -> argparse.ArgumentParser:
+    """Create the standalone Human Review subcommand parser."""
+
+    parser = argparse.ArgumentParser(
+        prog="python -m business_analysis_agents human-review",
+        description="Interactively review Consistency findings.",
+    )
+    parser.add_argument("--workflow", default=str(DEFAULT_REVIEW_WORKFLOW_RDF))
+    parser.add_argument("--data", default=str(DEFAULT_REVIEW_DATA_RDF))
+    parser.add_argument("--rule", default=str(DEFAULT_REVIEW_RULE_RDF))
+    parser.add_argument(
+        "--consistency-evaluation",
+        default=str(DEFAULT_REVIEW_CONSISTENCY_EVALUATION),
+    )
+    parser.add_argument("--output", default=str(DEFAULT_HUMAN_REVIEW_OUTPUT))
+    parser.add_argument("--reviewer", default=None)
+    return parser
+
+
 def build_run_parser() -> argparse.ArgumentParser:
     """Create the End-to-End Controller subcommand parser."""
 
     parser = argparse.ArgumentParser(
         prog="python -m business_analysis_agents run",
-        description="Run Scenario through Consistency evaluation from one PDF.",
+        description="Run Scenario through interactive Human Review from one PDF.",
     )
     parser.add_argument("--pdf", required=True, help="Input business document PDF.")
     parser.add_argument(
@@ -484,6 +543,7 @@ def build_run_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-workflow-iterations", type=int, default=None)
     parser.add_argument("--max-data-iterations", type=int, default=None)
     parser.add_argument("--max-rule-iterations", type=int, default=None)
+    parser.add_argument("--reviewer", default=None)
     return parser
 
 
@@ -493,6 +553,30 @@ def run(argv: Sequence[str] | None = None) -> int:
     raw_args = list(argv) if argv is not None else []
     load_dotenv()
     config = load_config_from_env()
+
+    if raw_args[:1] == ["human-review"]:
+        args = build_human_review_parser().parse_args(raw_args[1:])
+        try:
+            report = run_human_review(
+                workflow_file=args.workflow,
+                data_file=args.data,
+                rule_file=args.rule,
+                consistency_evaluation_file=args.consistency_evaluation,
+                output_file=args.output,
+                reviewer=args.reviewer,
+            )
+        except (
+            FileNotFoundError,
+            HumanReviewInputError,
+            PermissionError,
+            ValueError,
+        ) as error:
+            print(f"エラー: {error}")
+            return 1
+        print("Human Reviewを完了しました")
+        print(f"出力: {args.output}")
+        print(f"レビュー状態: {report.status.value}")
+        return 0
 
     if raw_args[:1] == ["run"]:
         args = build_run_parser().parse_args(raw_args[1:])
@@ -520,6 +604,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                     if args.max_rule_iterations is not None
                     else config.max_repair_iterations
                 ),
+                reviewer=args.reviewer,
             )
         except (FileNotFoundError, PermissionError, ValueError) as error:
             print(f"エラー: {error}")
@@ -532,6 +617,11 @@ def run(argv: Sequence[str] | None = None) -> int:
                 ControllerStage.CONSISTENCY,
             ).pipeline_status
             print(f"Consistency評価: {consistency_status}")
+            human_review_status = _stage_result(
+                summary,
+                ControllerStage.HUMAN_REVIEW,
+            ).pipeline_status
+            print(f"Human Review: {human_review_status}")
             return 0
         print(f"失敗工程: {summary.failed_stage.value if summary.failed_stage else 'unknown'}")
         print(f"エラー: {summary.error_message}")

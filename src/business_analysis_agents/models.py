@@ -61,6 +61,25 @@ class RepairAction(str, Enum):
     STOP = "stop"
 
 
+class HumanReviewDecision(str, Enum):
+    """Consistency findingに対する人間の判断。"""
+
+    APPROVE_FINDING = "approve_finding"
+    APPROVE_CURRENT_RDF = "approve_current_rdf"
+    PROVIDE_CONTEXT = "provide_context"
+    PENDING = "pending"
+
+
+class HumanReviewGroupDecision(str, Enum):
+    """Consistency findingグループに対する人間の判断。"""
+
+    APPROVE_ALL_FINDINGS = "approve_all_findings"
+    APPROVE_ALL_CURRENT_RDF = "approve_all_current_rdf"
+    PROVIDE_GROUP_CONTEXT = "provide_group_context"
+    REVIEW_INDIVIDUALLY = "review_individually"
+    PENDING = "pending"
+
+
 class RunStatus(str, Enum):
     """実行全体の進行状態。"""
 
@@ -78,6 +97,7 @@ class ControllerStage(str, Enum):
     WORKFLOW = "workflow"
     DATA_RULE = "data_rule"
     CONSISTENCY = "consistency"
+    HUMAN_REVIEW = "human_review"
 
 
 class ControllerStageStatus(str, Enum):
@@ -467,6 +487,7 @@ class ShaclViolation(StrictBaseModel):
     message: str = Field(min_length=1)
     path: str | None = None
     source_shape: str | None = None
+    constraint_component: str | None = None
     severity: Severity = Severity.ERROR
     rdf_kind: RdfKind | None = None
 
@@ -562,6 +583,61 @@ class HumanReviewResult(StrictBaseModel):
     comment: str = Field(min_length=1)
     selected_action: RepairAction | None = None
     corrected_text: str | None = None
+
+
+class HumanReviewFindingReference(StrictBaseModel):
+    """Human Reviewから元Consistency findingを参照する情報。"""
+
+    finding_id: str = Field(min_length=1)
+    consistency_violation_index: int = Field(ge=0)
+    target_resource: str = Field(min_length=1)
+    source_violation: ShaclViolation
+    source_analysis: ConsistencyViolationAnalysis
+
+
+class HumanReviewFindingResult(HumanReviewFindingReference):
+    """1件のConsistency findingに対する人間のレビュー結果。"""
+
+    decision: HumanReviewDecision
+    supplemental_comment: str | None = None
+
+
+class HumanReviewGroupResult(StrictBaseModel):
+    """同じ構造的条件を持つConsistency findingsのレビュー結果。"""
+
+    group_id: str = Field(min_length=1)
+    group_key: str = Field(min_length=1)
+    finding_ids: list[str] = Field(min_length=1)
+    violation_type: str = Field(min_length=1)
+    target_agent: AgentName
+    result_path: str | None = None
+    constraint_component: str | None = None
+    source_shape: str | None = None
+    common_cause: str = Field(min_length=1)
+    common_repair_policy: str = Field(min_length=1)
+    target_resources: list[str] = Field(min_length=1)
+    decision: HumanReviewGroupDecision
+    supplemental_comment: str | None = None
+    individually_reviewed: bool = False
+    source_findings: list[HumanReviewFindingReference] = Field(min_length=1)
+    individual_results: list[HumanReviewFindingResult] = Field(default_factory=list)
+
+
+class HumanReviewReport(StrictBaseModel):
+    """Consistency評価全体に対するHuman Review成果物。"""
+
+    status: ReviewStatus
+    reviewer: str | None = None
+    reviewed_at: datetime = Field(default_factory=datetime.now)
+    consistency_status: ReviewStatus
+    consistency_conforms: bool
+    workflow_rdf_file: str = Field(min_length=1)
+    data_rdf_file: str = Field(min_length=1)
+    rule_rdf_file: str = Field(min_length=1)
+    consistency_evaluation_file: str = Field(min_length=1)
+    groups: list[HumanReviewGroupResult] = Field(default_factory=list)
+    findings: list[HumanReviewFindingResult] = Field(default_factory=list)
+    summary: str = Field(min_length=1)
 
 
 class RepairHistoryEntry(StrictBaseModel):

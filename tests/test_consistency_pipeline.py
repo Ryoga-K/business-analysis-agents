@@ -321,4 +321,7 @@ def test_consistency_pipeline_analyzes_violation_without_rerunning_agents(
     assert not evaluation["conforms"]
     assert evaluation["target_agent"] == "data"
     assert evaluation["violations"][0]["rdf_kind"] == RdfKind.CONSISTENCY.value
+    assert evaluation["violations"][0]["constraint_component"].endswith(
+        "ClassConstraintComponent"
+    )
     assert evaluation["violation_analyses"][0]["repair_instruction"]
