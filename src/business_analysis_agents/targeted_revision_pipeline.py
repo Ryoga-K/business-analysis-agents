@@ -9,6 +9,7 @@ from typing import Any
 
 from business_analysis_agents.agents.data_rule import run_data_rule_agent
 from business_analysis_agents.agents.workflow import run_workflow_agent
+from business_analysis_agents.config import MAX_REVISION_ITERATIONS
 from business_analysis_agents.document_loader import load_pdf_document
 from business_analysis_agents.fixed_resources import load_fixed_turtle
 from business_analysis_agents.models import (
@@ -136,8 +137,6 @@ def run_targeted_rdf_revision(
     workflow_self_review_file: Path | str,
     data_self_review_file: Path | str,
     rule_self_review_file: Path | str,
-    max_shacl_iterations: int = 3,
-    max_self_review_iterations: int = 3,
     workflow_runner: Callable[..., Any] | None = None,
     data_rule_runner: Callable[..., Any] | None = None,
     progress: ProgressReporter | None = None,
@@ -146,8 +145,6 @@ def run_targeted_rdf_revision(
 
     if target_agent not in {AgentName.WORKFLOW, AgentName.DATA, AgentName.RULE}:
         raise ValueError(f"Unsupported targeted revision agent: {target_agent.value}")
-    if max_shacl_iterations < 0 or max_self_review_iterations < 0:
-        raise ValueError("Revision iteration limits must be zero or greater.")
 
     scenario_turtle = load_scenario_rdf(scenario_file)
     source_document = load_pdf_document(pdf_file).model_dump(
@@ -344,7 +341,7 @@ def run_targeted_rdf_revision(
         }
     )
 
-    for repair_iteration in range(1, max_shacl_iterations + 1):
+    for repair_iteration in range(1, MAX_REVISION_ITERATIONS + 1):
         if validation.conforms:
             break
         report_progress(
@@ -354,7 +351,7 @@ def run_targeted_rdf_revision(
             status=ProgressStatus.REVISION,
             message=f"{target_agent.value.title()} SHACL revision",
             iteration=repair_iteration,
-            max_iterations=max_shacl_iterations,
+            max_iterations=MAX_REVISION_ITERATIONS,
         )
         current_rdf, revision_output = run_revision(current_rdf, validation)
         revision_iteration = len(revision_history) + 1
@@ -374,7 +371,7 @@ def run_targeted_rdf_revision(
                 else f"{target_agent.value.title()} violations remain"
             ),
             iteration=repair_iteration,
-            max_iterations=max_shacl_iterations,
+            max_iterations=MAX_REVISION_ITERATIONS,
         )
         revision_history.append(
             {
@@ -477,7 +474,6 @@ def run_targeted_rdf_revision(
         validation=validation,
         rdf_kind=rdf_kind,
         reviewer_agent=target_agent,
-        max_revision_iterations=max_self_review_iterations,
         revision_history=revision_history,
         review_rdf=review_rdf,
         revise_rdf=revise_from_self_review,

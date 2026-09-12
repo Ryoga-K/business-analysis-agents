@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from business_analysis_agents import controller
+from business_analysis_agents.config import MAX_REVISION_ITERATIONS
 from business_analysis_agents.models import (
     ControllerRunSummary,
     ControllerStage,
@@ -297,7 +298,7 @@ def test_end_to_end_controller_records_human_review_failure(
     assert summary.stages[4].error_message == "invalid review input"
 
 
-def test_run_subcommand_returns_success_for_completed_cross_review(
+def test_run_subcommand_uses_fixed_revision_limit(
     monkeypatch,
     tmp_path,
     capsys,
@@ -332,19 +333,14 @@ def test_run_subcommand_returns_success_for_completed_cross_review(
 
     monkeypatch.setattr(controller, "run_end_to_end_controller", fake_controller)
 
-    assert (
-        controller.run(
-            [
-                "run",
-                "--pdf",
-                "manual.pdf",
-                "--max-cross-revision-iterations",
-                "5",
-            ]
-        )
-        == 0
-    )
-    assert received["max_cross_revision_iterations"] == 5
+    assert controller.run(["run", "--pdf", "manual.pdf"]) == 0
+    assert not any(key.startswith("max_") for key in received)
+    for parser_factory in (
+        controller.build_run_parser,
+        controller.build_workflow_parser,
+        controller.build_data_rule_parser,
+    ):
+        assert "--max-" not in parser_factory().format_help()
     output = capsys.readouterr().out
     assert "Consistency評価: needs_revision" in output
     assert "Human Review: needs_revision" in output
@@ -463,13 +459,6 @@ def test_consistency_revision_loop_groups_targets_and_reuses_cross_shacl(
         workflow_ontology_file=tmp_path / "workflow-ontology.ttl",
         data_ontology_file=tmp_path / "data-ontology.ttl",
         rule_ontology_file=tmp_path / "rule-ontology.ttl",
-        max_cross_revision_iterations=2,
-        max_workflow_iterations=3,
-        max_data_iterations=3,
-        max_rule_iterations=3,
-        max_workflow_self_review_iterations=3,
-        max_data_self_review_iterations=3,
-        max_rule_self_review_iterations=3,
     )
 
     assert final_result["final_status"] == "completed"
@@ -483,6 +472,7 @@ def test_consistency_revision_loop_groups_targets_and_reuses_cross_shacl(
         )
     )
     assert saved["cross_shapes_hash"] == "fixed-cross-hash"
+    assert saved["max_cross_revision_iterations"] == MAX_REVISION_ITERATIONS
     assert len(saved["iterations"]) == 2
     assert saved["iterations"][0]["revision_results"][0][
         "target_agent"

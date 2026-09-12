@@ -24,7 +24,10 @@ from business_analysis_agents.agents.consistency import (
 from business_analysis_agents.agents.workflow import (
     MissingOpenAIAPIKeyError as WorkflowMissingOpenAIAPIKeyError,
 )
-from business_analysis_agents.config import load_config_from_env
+from business_analysis_agents.config import (
+    MAX_REVISION_ITERATIONS,
+    load_config_from_env,
+)
 from business_analysis_agents.consistency_pipeline import (
     DEFAULT_DATA_RDF,
     DEFAULT_DATA_VALIDATION,
@@ -34,13 +37,7 @@ from business_analysis_agents.consistency_pipeline import (
     DEFAULT_WORKFLOW_VALIDATION,
     run_consistency_pipeline,
 )
-from business_analysis_agents.data_rule_pipeline import (
-    DEFAULT_MAX_DATA_ITERATIONS,
-    DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS,
-    DEFAULT_MAX_RULE_ITERATIONS,
-    DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS,
-    run_data_rule_pipeline,
-)
+from business_analysis_agents.data_rule_pipeline import run_data_rule_pipeline
 from business_analysis_agents.fixed_resources import (
     DEFAULT_DATA_ONTOLOGY,
     DEFAULT_RULE_ONTOLOGY,
@@ -74,19 +71,10 @@ from business_analysis_agents.review.cli import (
     HumanReviewInputError,
     run_human_review,
 )
-from business_analysis_agents.workflow_pipeline import (
-    DEFAULT_MAX_WORKFLOW_ITERATIONS,
-    DEFAULT_MAX_WORKFLOW_SELF_REVIEW_ITERATIONS,
-    run_workflow_pipeline,
-    write_json,
-)
+from business_analysis_agents.workflow_pipeline import run_workflow_pipeline, write_json
 from business_analysis_agents.targeted_revision_pipeline import (
     run_targeted_rdf_revision,
 )
-
-
-DEFAULT_MAX_CROSS_REVISION_ITERATIONS = 3
-
 
 def run_scenario_pipeline(
     pdf_file: Path | str,
@@ -259,19 +247,10 @@ def run_consistency_revision_loop(
     workflow_ontology_file: Path | str,
     data_ontology_file: Path | str,
     rule_ontology_file: Path | str,
-    max_cross_revision_iterations: int,
-    max_workflow_iterations: int,
-    max_data_iterations: int,
-    max_rule_iterations: int,
-    max_workflow_self_review_iterations: int,
-    max_data_self_review_iterations: int,
-    max_rule_self_review_iterations: int,
     progress: ProgressReporter | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run Cross Consistency and bounded targeted revision rounds."""
 
-    if max_cross_revision_iterations < 0:
-        raise ValueError("max_cross_revision_iterations must be zero or greater.")
     workflow_file = workflow_dir / "workflow_final.ttl"
     data_file = data_rule_dir / "data_final.ttl"
     rule_file = data_rule_dir / "rule_final.ttl"
@@ -298,7 +277,7 @@ def run_consistency_revision_loop(
     iteration_history: list[dict[str, Any]] = []
     history: dict[str, Any] = {
         "status": "running",
-        "max_cross_revision_iterations": max_cross_revision_iterations,
+        "max_cross_revision_iterations": MAX_REVISION_ITERATIONS,
         "cross_shapes_hash": cross_shapes_hash,
         "iterations": iteration_history,
     }
@@ -331,7 +310,7 @@ def run_consistency_revision_loop(
             iteration_history.append(record)
             history["status"] = "completed"
             break
-        if revision_round >= max_cross_revision_iterations:
+        if revision_round >= MAX_REVISION_ITERATIONS:
             report_progress(
                 progress,
                 phase="consistency",
@@ -339,7 +318,7 @@ def run_consistency_revision_loop(
                 status=ProgressStatus.WARNING,
                 message="Maximum Cross revision iterations reached",
                 iteration=revision_round,
-                max_iterations=max_cross_revision_iterations,
+                max_iterations=MAX_REVISION_ITERATIONS,
             )
             iteration_history.append(record)
             history["status"] = "max_iterations"
@@ -358,16 +337,6 @@ def run_consistency_revision_loop(
 
         revision_results: list[dict[str, Any]] = []
         revision_failed = False
-        shacl_limits = {
-            AgentName.WORKFLOW: max_workflow_iterations,
-            AgentName.DATA: max_data_iterations,
-            AgentName.RULE: max_rule_iterations,
-        }
-        self_review_limits = {
-            AgentName.WORKFLOW: max_workflow_self_review_iterations,
-            AgentName.DATA: max_data_self_review_iterations,
-            AgentName.RULE: max_rule_self_review_iterations,
-        }
         for bundle in bundles:
             target = AgentName(str(bundle["target_agent"]))
             with progress_operation(
@@ -377,7 +346,7 @@ def run_consistency_revision_loop(
                 message="Cross revision",
                 completed_message="Targeted RDF revision completed",
                 iteration=revision_round + 1,
-                max_iterations=max_cross_revision_iterations,
+                max_iterations=MAX_REVISION_ITERATIONS,
                 target=target.value,
                 start_status=ProgressStatus.REVISION,
             ):
@@ -418,8 +387,6 @@ def run_consistency_revision_loop(
                     ),
                     data_self_review_file=data_rule_dir / "data_self_review.json",
                     rule_self_review_file=data_rule_dir / "rule_self_review.json",
-                    max_shacl_iterations=shacl_limits[target],
-                    max_self_review_iterations=self_review_limits[target],
                     progress=progress,
                 )
             revision_results.append(result)
@@ -454,7 +421,7 @@ def run_consistency_revision_loop(
             status=ProgressStatus.RUNNING,
             message="Cross re-validation",
             iteration=revision_round,
-            max_iterations=max_cross_revision_iterations,
+            max_iterations=MAX_REVISION_ITERATIONS,
         )
         consistency_result = run_consistency_pipeline(
             model=model,
@@ -487,15 +454,6 @@ def run_end_to_end_controller(
     workflow_ontology_file: Path | str = DEFAULT_WORKFLOW_ONTOLOGY,
     data_ontology_file: Path | str = DEFAULT_DATA_ONTOLOGY,
     rule_ontology_file: Path | str = DEFAULT_RULE_ONTOLOGY,
-    max_workflow_iterations: int = DEFAULT_MAX_WORKFLOW_ITERATIONS,
-    max_data_iterations: int = DEFAULT_MAX_DATA_ITERATIONS,
-    max_rule_iterations: int = DEFAULT_MAX_RULE_ITERATIONS,
-    max_workflow_self_review_iterations: int = (
-        DEFAULT_MAX_WORKFLOW_SELF_REVIEW_ITERATIONS
-    ),
-    max_data_self_review_iterations: int = DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS,
-    max_rule_self_review_iterations: int = DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS,
-    max_cross_revision_iterations: int = DEFAULT_MAX_CROSS_REVISION_ITERATIONS,
     reviewer: str | None = None,
     progress: ProgressReporter | None = None,
 ) -> ControllerRunSummary:
@@ -571,8 +529,6 @@ def run_end_to_end_controller(
             model=model,
             pdf_file=pdf_file,
             output_dir=workflow_dir,
-            max_workflow_iterations=max_workflow_iterations,
-            max_self_review_iterations=max_workflow_self_review_iterations,
             ontology_file=workflow_ontology_file,
             progress=progress_reporter,
         )
@@ -623,10 +579,6 @@ def run_end_to_end_controller(
             model=model,
             pdf_file=pdf_file,
             output_dir=data_rule_dir,
-            max_data_iterations=max_data_iterations,
-            max_rule_iterations=max_rule_iterations,
-            max_data_self_review_iterations=max_data_self_review_iterations,
-            max_rule_self_review_iterations=max_rule_self_review_iterations,
             data_ontology_file=data_ontology_file,
             rule_ontology_file=rule_ontology_file,
             progress=progress_reporter,
@@ -680,15 +632,6 @@ def run_end_to_end_controller(
             workflow_ontology_file=workflow_ontology_file,
             data_ontology_file=data_ontology_file,
             rule_ontology_file=rule_ontology_file,
-            max_cross_revision_iterations=max_cross_revision_iterations,
-            max_workflow_iterations=max_workflow_iterations,
-            max_data_iterations=max_data_iterations,
-            max_rule_iterations=max_rule_iterations,
-            max_workflow_self_review_iterations=(
-                max_workflow_self_review_iterations
-            ),
-            max_data_self_review_iterations=max_data_self_review_iterations,
-            max_rule_self_review_iterations=max_rule_self_review_iterations,
             progress=progress_reporter,
         )
     except Exception as error:
@@ -830,18 +773,6 @@ def build_workflow_parser() -> argparse.ArgumentParser:
         help="Workflow ontology Turtle file.",
     )
     workflow_parser.add_argument(
-        "--max-workflow-iterations",
-        type=int,
-        default=3,
-        help="Maximum Workflow RDF revision retries.",
-    )
-    workflow_parser.add_argument(
-        "--max-self-review-iterations",
-        type=int,
-        default=DEFAULT_MAX_WORKFLOW_SELF_REVIEW_ITERATIONS,
-        help="Maximum Workflow Self-Review revision retries.",
-    )
-    workflow_parser.add_argument(
         "--save-debug-outputs",
         action="store_true",
         help="Save ontology, SHACL, agent output, and run metadata artifacts.",
@@ -880,30 +811,6 @@ def build_data_rule_parser() -> argparse.ArgumentParser:
         "--rule-ontology",
         default=str(DEFAULT_RULE_ONTOLOGY),
         help="Rule ontology Turtle file.",
-    )
-    parser.add_argument(
-        "--max-data-iterations",
-        type=int,
-        default=3,
-        help="Maximum Data RDF revision retries.",
-    )
-    parser.add_argument(
-        "--max-rule-iterations",
-        type=int,
-        default=3,
-        help="Maximum Rule RDF revision retries.",
-    )
-    parser.add_argument(
-        "--max-data-self-review-iterations",
-        type=int,
-        default=DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS,
-        help="Maximum Data Self-Review revision retries.",
-    )
-    parser.add_argument(
-        "--max-rule-self-review-iterations",
-        type=int,
-        default=DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS,
-        help="Maximum Rule Self-Review revision retries.",
     )
     return parser
 
@@ -976,21 +883,6 @@ def build_run_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--data-ontology", default=str(DEFAULT_DATA_ONTOLOGY))
     parser.add_argument("--rule-ontology", default=str(DEFAULT_RULE_ONTOLOGY))
-    parser.add_argument("--max-workflow-iterations", type=int, default=None)
-    parser.add_argument("--max-data-iterations", type=int, default=None)
-    parser.add_argument("--max-rule-iterations", type=int, default=None)
-    parser.add_argument(
-        "--max-workflow-self-review-iterations",
-        type=int,
-        default=None,
-    )
-    parser.add_argument("--max-data-self-review-iterations", type=int, default=None)
-    parser.add_argument("--max-rule-self-review-iterations", type=int, default=None)
-    parser.add_argument(
-        "--max-cross-revision-iterations",
-        type=int,
-        default=None,
-    )
     parser.add_argument("--reviewer", default=None)
     return parser
 
@@ -1037,41 +929,6 @@ def run(argv: Sequence[str] | None = None) -> int:
                 workflow_ontology_file=args.workflow_ontology,
                 data_ontology_file=args.data_ontology,
                 rule_ontology_file=args.rule_ontology,
-                max_workflow_iterations=(
-                    args.max_workflow_iterations
-                    if args.max_workflow_iterations is not None
-                    else config.max_repair_iterations
-                ),
-                max_data_iterations=(
-                    args.max_data_iterations
-                    if args.max_data_iterations is not None
-                    else config.max_repair_iterations
-                ),
-                max_rule_iterations=(
-                    args.max_rule_iterations
-                    if args.max_rule_iterations is not None
-                    else config.max_repair_iterations
-                ),
-                max_workflow_self_review_iterations=(
-                    args.max_workflow_self_review_iterations
-                    if args.max_workflow_self_review_iterations is not None
-                    else config.max_repair_iterations
-                ),
-                max_data_self_review_iterations=(
-                    args.max_data_self_review_iterations
-                    if args.max_data_self_review_iterations is not None
-                    else config.max_repair_iterations
-                ),
-                max_rule_self_review_iterations=(
-                    args.max_rule_self_review_iterations
-                    if args.max_rule_self_review_iterations is not None
-                    else config.max_repair_iterations
-                ),
-                max_cross_revision_iterations=(
-                    args.max_cross_revision_iterations
-                    if args.max_cross_revision_iterations is not None
-                    else config.max_repair_iterations
-                ),
                 reviewer=args.reviewer,
             )
         except (FileNotFoundError, PermissionError, ValueError) as error:
@@ -1103,8 +960,6 @@ def run(argv: Sequence[str] | None = None) -> int:
                 model=config.openai_model,
                 pdf_file=args.pdf,
                 output_dir=args.output_dir,
-                max_workflow_iterations=args.max_workflow_iterations,
-                max_self_review_iterations=args.max_self_review_iterations,
                 ontology_file=args.ontology,
                 save_debug_outputs=args.save_debug_outputs,
             )
@@ -1127,14 +982,6 @@ def run(argv: Sequence[str] | None = None) -> int:
                 model=config.openai_model,
                 pdf_file=args.pdf,
                 output_dir=args.output_dir,
-                max_data_iterations=args.max_data_iterations,
-                max_rule_iterations=args.max_rule_iterations,
-                max_data_self_review_iterations=(
-                    args.max_data_self_review_iterations
-                ),
-                max_rule_self_review_iterations=(
-                    args.max_rule_self_review_iterations
-                ),
                 data_ontology_file=args.data_ontology,
                 rule_ontology_file=args.rule_ontology,
             )

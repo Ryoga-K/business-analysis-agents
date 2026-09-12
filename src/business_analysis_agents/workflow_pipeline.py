@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from business_analysis_agents.agents.workflow import run_workflow_agent
+from business_analysis_agents.config import MAX_REVISION_ITERATIONS
 from business_analysis_agents.document_loader import load_pdf_document
 from business_analysis_agents.fixed_resources import (
     DEFAULT_WORKFLOW_ONTOLOGY,
@@ -38,9 +39,6 @@ from business_analysis_agents.progress import (
 )
 from business_analysis_agents.self_review import run_self_review_loop
 
-
-DEFAULT_MAX_WORKFLOW_ITERATIONS = 3
-DEFAULT_MAX_WORKFLOW_SELF_REVIEW_ITERATIONS = 3
 DEBUG_OUTPUT_FILENAMES = (
     "workflow_ontology_v0_1.ttl",
     "workflow_shapes_v0_1.ttl",
@@ -144,8 +142,6 @@ def run_workflow_pipeline(
     model: str,
     pdf_file: Path | str,
     output_dir: Path | str = "outputs/workflow",
-    max_workflow_iterations: int = DEFAULT_MAX_WORKFLOW_ITERATIONS,
-    max_self_review_iterations: int = DEFAULT_MAX_WORKFLOW_SELF_REVIEW_ITERATIONS,
     runner: Callable[..., Any] | None = None,
     ontology_file: Path | str = DEFAULT_WORKFLOW_ONTOLOGY,
     save_debug_outputs: bool = False,
@@ -278,7 +274,7 @@ def run_workflow_pipeline(
     )
     final_output = generation_output
 
-    for iteration in range(1, max_workflow_iterations + 1):
+    for iteration in range(1, MAX_REVISION_ITERATIONS + 1):
         if validation.conforms:
             break
 
@@ -289,7 +285,7 @@ def run_workflow_pipeline(
             status=ProgressStatus.REVISION,
             message="Workflow SHACL revision",
             iteration=iteration,
-            max_iterations=max_workflow_iterations,
+            max_iterations=MAX_REVISION_ITERATIONS,
         )
         _assert_fixed_hashes(ontology_turtle, shacl_turtle, ontology_hash, shapes_hash)
         revision_output = run_workflow_agent(
@@ -334,7 +330,7 @@ def run_workflow_pipeline(
                 else "Workflow SHACL violations remain"
             ),
             iteration=iteration,
-            max_iterations=max_workflow_iterations,
+            max_iterations=MAX_REVISION_ITERATIONS,
         )
         final_output = revision_output
         revision_history.append(
@@ -424,7 +420,6 @@ def run_workflow_pipeline(
         validation=validation,
         rdf_kind=RdfKind.WORKFLOW,
         reviewer_agent=AgentName.WORKFLOW,
-        max_revision_iterations=max_self_review_iterations,
         revision_history=revision_history,
         review_rdf=review_rdf,
         revise_rdf=revise_from_self_review,
@@ -472,8 +467,8 @@ def run_workflow_pipeline(
         "generated_shapes_file": str(generated_shapes_path),
         "ontology_hash": ontology_hash,
         "shapes_hash": shapes_hash,
-        "max_workflow_iterations": max_workflow_iterations,
-        "max_self_review_iterations": max_self_review_iterations,
+        "max_workflow_iterations": MAX_REVISION_ITERATIONS,
+        "max_self_review_iterations": MAX_REVISION_ITERATIONS,
         "self_review_status": self_review_history.status.value,
         "final_status": final_status,
     }

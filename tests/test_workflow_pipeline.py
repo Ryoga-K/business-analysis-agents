@@ -15,6 +15,7 @@ from business_analysis_agents.agents.workflow import (
     build_workflow_agent,
     run_workflow_agent,
 )
+from business_analysis_agents.config import MAX_REVISION_ITERATIONS
 from business_analysis_agents.models import (
     AgentName,
     RdfKind,
@@ -555,19 +556,20 @@ def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> N
         model="gpt-test",
         pdf_file=pdf_file,
         output_dir=tmp_path / "workflow",
-        max_workflow_iterations=2,
         runner=fake_runner,
         ontology_file=ontology_file,
     )
 
     assert result["final_status"] == "needs_review"
-    assert revision_calls == 2
+    assert revision_calls == MAX_REVISION_ITERATIONS
     assert shacl_calls == 1
     workflow_dir = tmp_path / "workflow"
     history = json.loads(
         (workflow_dir / "workflow_revision_history.json").read_text(encoding="utf-8")
     )
-    assert [entry["iteration"] for entry in history] == [1, 2]
+    assert [entry["iteration"] for entry in history] == list(
+        range(1, MAX_REVISION_ITERATIONS + 1)
+    )
     assert all("output" in entry and "validation" in entry for entry in history)
     assert (workflow_dir / "workflow_final.ttl").read_text(
         encoding="utf-8"
@@ -730,7 +732,7 @@ def test_self_review_revises_rdf_and_reuses_generated_shacl(
     assert revision_history[0]["phase"] == "self_review_revision"
 
 
-def test_self_review_stops_at_configured_revision_limit(monkeypatch, tmp_path) -> None:
+def test_self_review_stops_at_shared_revision_limit(monkeypatch, tmp_path) -> None:
     """An unresolved semantic finding ends as needs_review without an infinite loop."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -750,8 +752,11 @@ def test_self_review_stops_at_configured_revision_limit(monkeypatch, tmp_path) -
         ],
         revision_instruction="Add the documented workflow detail.",
     )
+    review_calls = 0
+    revision_calls = 0
 
     def fake_runner(_agent, prompt):
+        nonlocal review_calls, revision_calls
         if "workflow_shacl_generation" in prompt:
             return SimpleNamespace(
                 final_output=WorkflowAgentOutput(
@@ -760,6 +765,7 @@ def test_self_review_stops_at_configured_revision_limit(monkeypatch, tmp_path) -
                 )
             )
         if "workflow_self_review" in prompt:
+            review_calls += 1
             return SimpleNamespace(
                 final_output=WorkflowAgentOutput(
                     mode=WorkflowAgentMode.WORKFLOW_SELF_REVIEW,
@@ -767,7 +773,13 @@ def test_self_review_stops_at_configured_revision_limit(monkeypatch, tmp_path) -
                 )
             )
         if "workflow_revision" in prompt:
-            pytest.fail("Self-Review revision must not run when its limit is zero")
+            revision_calls += 1
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_REVISION,
+                    workflow_rdf_turtle=VALID_WORKFLOW_TTL,
+                )
+            )
         return SimpleNamespace(
             final_output=WorkflowAgentOutput(
                 mode=WorkflowAgentMode.WORKFLOW_GENERATION,
@@ -781,7 +793,6 @@ def test_self_review_stops_at_configured_revision_limit(monkeypatch, tmp_path) -
         model="gpt-test",
         pdf_file=pdf_file,
         output_dir=output_dir,
-        max_self_review_iterations=0,
         runner=fake_runner,
         ontology_file=ontology_file,
     )
@@ -791,7 +802,10 @@ def test_self_review_stops_at_configured_revision_limit(monkeypatch, tmp_path) -
         (output_dir / "workflow_self_review.json").read_text(encoding="utf-8")
     )
     assert history["status"] == "max_iterations"
-    assert len(history["iterations"]) == 1
+    assert history["max_revision_iterations"] == MAX_REVISION_ITERATIONS
+    assert revision_calls == MAX_REVISION_ITERATIONS
+    assert review_calls == MAX_REVISION_ITERATIONS + 1
+    assert len(history["iterations"]) == MAX_REVISION_ITERATIONS + 1
 
 
 def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> None:
@@ -826,7 +840,6 @@ def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> N
         model="gpt-test",
         pdf_file=pdf_file,
         output_dir=tmp_path / "workflow",
-        max_workflow_iterations=0,
         runner=fake_runner,
         ontology_file=ontology_file,
     )

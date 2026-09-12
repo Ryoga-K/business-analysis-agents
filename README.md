@@ -106,7 +106,6 @@ Copy-Item .env.example .env
 ```env
 OPENAI_API_KEY=
 OPENAI_MODEL=
-MAX_REPAIR_ITERATIONS=3
 OUTPUT_DIR=outputs
 ```
 
@@ -162,7 +161,7 @@ PDF
 
 WorkflowまたはData/Ruleの個別検証が未適合の場合と、工程内で例外が発生した場合は後続工程を実行しません。自動Cross revision後もConsistencyが`needs_revision`の場合はHuman Reviewへ進みます。findingや人間の判断内容はシステムエラーとせず、Human Reviewの入出力処理が失敗した場合だけ全体を失敗とします。
 
-ControllerのCross revision回数は`--max-cross-revision-iterations`で変更できます。デフォルトは`MAX_REPAIR_ITERATIONS`です。
+Workflow、Data、Rule、Self-Review、Cross revision、targeted revisionの最大反復回数は、`src/business_analysis_agents/config.py`の`MAX_REVISION_ITERATIONS = 3`を共通して使用します。最大回数を変更する場合は、この定数だけを変更してください。CLIや環境変数からの上書きは行いません。
 
 実行中は、共通の進捗Reporterが大フェーズ、API呼び出し前後、検証結果、修正回数と修正対象を表示します。表示にはWindows端末でも扱いやすい`[RUN]`、`[OK]`、`[NG]`、`[WARN]`、`[REV]`、`[DONE]`を使用します。
 
@@ -225,7 +224,7 @@ outputs/workflow/
 - `workflow_revision_history.json`
 - `workflow_self_review.json`
 
-Self-Reviewによる修正回数は`--max-self-review-iterations`で変更できます。Self-Review revision後も、raw RDF生成後に作成した同じ`workflow_shapes_generated.ttl`で再検証します。
+Self-Review revision後も、raw RDF生成後に作成した同じ`workflow_shapes_generated.ttl`で再検証します。SHACL revisionとSelf-Review revisionの最大回数には共通の`MAX_REVISION_ITERATIONS`を使用します。
 
 固定Ontology、生成SHACLの検証結果やAgent出力などの詳細ファイルも保存する場合:
 
@@ -271,7 +270,7 @@ outputs/data_rule/
 - `rule_revision_history.json`
 - `rule_self_review.json`
 
-Self-Reviewによる修正回数は`--max-data-self-review-iterations`と`--max-rule-self-review-iterations`で個別に変更できます。
+Data/RuleのSHACL revisionとSelf-Review revisionにも、共通の`MAX_REVISION_ITERATIONS`を使用します。
 
 ### 6. Workflow / Data / Rule RDF間のCross Reviewを実行
 

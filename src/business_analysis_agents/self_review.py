@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from business_analysis_agents.config import MAX_REVISION_ITERATIONS
 from business_analysis_agents.models import (
     AgentName,
     RdfKind,
@@ -60,7 +61,6 @@ def run_self_review_loop(
     validation: WorkflowRdfValidationResult,
     rdf_kind: RdfKind,
     reviewer_agent: AgentName,
-    max_revision_iterations: int,
     revision_history: list[dict[str, Any]],
     review_rdf: ReviewRdf,
     revise_rdf: ReviseRdf,
@@ -77,8 +77,6 @@ def run_self_review_loop(
 ]:
     """Run semantic review until passed, SHACL failure, or the retry limit."""
 
-    if max_revision_iterations < 0:
-        raise ValueError("max_revision_iterations must be zero or greater.")
     iterations: list[SelfReviewIteration] = []
     last_result: SelfReviewResult | None = None
     last_revision_output: Any | None = None
@@ -99,7 +97,7 @@ def run_self_review_loop(
             SelfReviewHistory(
                 rdf_kind=rdf_kind,
                 status=SelfReviewRunStatus.SHACL_FAILED,
-                max_revision_iterations=max_revision_iterations,
+                max_revision_iterations=MAX_REVISION_ITERATIONS,
             ),
             None,
         )
@@ -137,7 +135,7 @@ def run_self_review_loop(
                 SelfReviewHistory(
                     rdf_kind=rdf_kind,
                     status=SelfReviewRunStatus.PASSED,
-                    max_revision_iterations=max_revision_iterations,
+                    max_revision_iterations=MAX_REVISION_ITERATIONS,
                     iterations=iterations,
                     final_result=result,
                 ),
@@ -153,7 +151,7 @@ def run_self_review_loop(
                 f"{len(result.findings)} issue(s)"
             ),
         )
-        if revision_count >= max_revision_iterations:
+        if revision_count >= MAX_REVISION_ITERATIONS:
             report_progress(
                 progress,
                 phase=progress_phase,
@@ -161,11 +159,11 @@ def run_self_review_loop(
                 status=ProgressStatus.WARNING,
                 message="Maximum Self-Review revision iterations reached",
                 iteration=revision_count,
-                max_iterations=max_revision_iterations,
+                max_iterations=MAX_REVISION_ITERATIONS,
             )
             break
 
-        while revision_count < max_revision_iterations:
+        while revision_count < MAX_REVISION_ITERATIONS:
             assert_fixed_resources()
             next_iteration = len(revision_history) + 1
             with progress_operation(
@@ -177,7 +175,7 @@ def run_self_review_loop(
                     f"{rdf_kind.value.title()} Self-Review revision completed"
                 ),
                 iteration=revision_count + 1,
-                max_iterations=max_revision_iterations,
+                max_iterations=MAX_REVISION_ITERATIONS,
                 start_status=ProgressStatus.REVISION,
             ):
                 rdf_turtle, output_payload, revision_output = revise_rdf(
@@ -204,7 +202,7 @@ def run_self_review_loop(
                     else f"{rdf_kind.value.title()} SHACL violations remain"
                 ),
                 iteration=revision_count,
-                max_iterations=max_revision_iterations,
+                max_iterations=MAX_REVISION_ITERATIONS,
             )
             revision_history.append(
                 {
@@ -228,7 +226,7 @@ def run_self_review_loop(
                 SelfReviewHistory(
                     rdf_kind=rdf_kind,
                     status=SelfReviewRunStatus.SHACL_FAILED,
-                    max_revision_iterations=max_revision_iterations,
+                    max_revision_iterations=MAX_REVISION_ITERATIONS,
                     iterations=iterations,
                     final_result=last_result,
                 ),
@@ -242,7 +240,7 @@ def run_self_review_loop(
         SelfReviewHistory(
             rdf_kind=rdf_kind,
             status=SelfReviewRunStatus.MAX_ITERATIONS,
-            max_revision_iterations=max_revision_iterations,
+            max_revision_iterations=MAX_REVISION_ITERATIONS,
             iterations=iterations,
             final_result=last_result,
         ),

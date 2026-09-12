@@ -8,12 +8,14 @@ import os
 from pathlib import Path
 
 
+MAX_REVISION_ITERATIONS = 3
+
+
 @dataclass(frozen=True)
 class AppConfig:
     """環境変数またはデフォルト値から決まる実行設定。"""
 
     openai_model: str = "gpt-5.6"
-    max_repair_iterations: int = 3
     output_dir: Path = Path("outputs")
 
     @property
@@ -26,10 +28,8 @@ class AppConfig:
 def load_config_from_env() -> AppConfig:
     """環境変数からアプリケーション設定を読み込む。"""
 
-    max_repair_iterations = os.getenv("MAX_REPAIR_ITERATIONS") or "3"
     return AppConfig(
         openai_model=os.getenv("OPENAI_MODEL") or "gpt-5.6",
-        max_repair_iterations=int(max_repair_iterations),
         output_dir=Path(os.getenv("OUTPUT_DIR") or "outputs"),
     )
 

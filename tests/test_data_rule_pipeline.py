@@ -640,8 +640,6 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
         model="gpt-test",
         pdf_file=pdf_file,
         output_dir=tmp_path / "data_rule",
-        max_data_iterations=2,
-        max_rule_iterations=2,
         runner=fake_runner,
         data_ontology_file=fixed_files[0],
         rule_ontology_file=fixed_files[1],

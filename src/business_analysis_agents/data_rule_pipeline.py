@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from business_analysis_agents.agents.data_rule import run_data_rule_agent
+from business_analysis_agents.config import MAX_REVISION_ITERATIONS
 from business_analysis_agents.document_loader import load_pdf_document
 from business_analysis_agents.fixed_resources import (
     DEFAULT_DATA_ONTOLOGY,
@@ -43,13 +44,6 @@ from business_analysis_agents.workflow_pipeline import (
     write_json,
     write_text,
 )
-
-
-DEFAULT_MAX_DATA_ITERATIONS = 3
-DEFAULT_MAX_RULE_ITERATIONS = 3
-DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS = 3
-DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS = 3
-
 
 def _output_payload(output: DataRuleAgentOutput) -> dict[str, Any]:
     return output.model_dump(mode="json")
@@ -113,8 +107,6 @@ def _generate_and_revise_data(
     data_ontology: str,
     data_ontology_hash: str,
     output_dir: Path,
-    max_iterations: int,
-    max_self_review_iterations: int,
     progress: ProgressReporter | None,
 ) -> tuple[
     str,
@@ -197,7 +189,7 @@ def _generate_and_revise_data(
     )
     final_output = output
 
-    for iteration in range(1, max_iterations + 1):
+    for iteration in range(1, MAX_REVISION_ITERATIONS + 1):
         if validation.conforms:
             break
         report_progress(
@@ -207,7 +199,7 @@ def _generate_and_revise_data(
             status=ProgressStatus.REVISION,
             message="Data SHACL revision",
             iteration=iteration,
-            max_iterations=max_iterations,
+            max_iterations=MAX_REVISION_ITERATIONS,
         )
         _assert_fixed_resources(
             data_ontology,
@@ -256,7 +248,7 @@ def _generate_and_revise_data(
                 else "Data SHACL violations remain"
             ),
             iteration=iteration,
-            max_iterations=max_iterations,
+            max_iterations=MAX_REVISION_ITERATIONS,
         )
         final_output = output
         data_history.append(
@@ -340,7 +332,6 @@ def _generate_and_revise_data(
             validation=validation,
             rdf_kind=RdfKind.DATA,
             reviewer_agent=AgentName.DATA,
-            max_revision_iterations=max_self_review_iterations,
             revision_history=data_history,
             review_rdf=review_rdf,
             revise_rdf=revise_from_self_review,
@@ -375,8 +366,6 @@ def _generate_and_revise_rule(
     data_turtle: str,
     rule_ontology_hash: str,
     output_dir: Path,
-    max_iterations: int,
-    max_self_review_iterations: int,
     progress: ProgressReporter | None,
 ) -> tuple[
     str,
@@ -461,7 +450,7 @@ def _generate_and_revise_rule(
     )
     final_output = output
 
-    for iteration in range(1, max_iterations + 1):
+    for iteration in range(1, MAX_REVISION_ITERATIONS + 1):
         if validation.conforms:
             break
         report_progress(
@@ -471,7 +460,7 @@ def _generate_and_revise_rule(
             status=ProgressStatus.REVISION,
             message="Rule SHACL revision",
             iteration=iteration,
-            max_iterations=max_iterations,
+            max_iterations=MAX_REVISION_ITERATIONS,
         )
         _assert_fixed_resources(
             rule_ontology,
@@ -522,7 +511,7 @@ def _generate_and_revise_rule(
                 else "Rule SHACL violations remain"
             ),
             iteration=iteration,
-            max_iterations=max_iterations,
+            max_iterations=MAX_REVISION_ITERATIONS,
         )
         final_output = output
         rule_history.append(
@@ -609,7 +598,6 @@ def _generate_and_revise_rule(
             validation=validation,
             rdf_kind=RdfKind.RULE,
             reviewer_agent=AgentName.RULE,
-            max_revision_iterations=max_self_review_iterations,
             revision_history=rule_history,
             review_rdf=review_rdf,
             revise_rdf=revise_from_self_review,
@@ -640,10 +628,6 @@ def run_data_rule_pipeline(
     model: str,
     pdf_file: Path | str,
     output_dir: Path | str = "outputs/data_rule",
-    max_data_iterations: int = DEFAULT_MAX_DATA_ITERATIONS,
-    max_rule_iterations: int = DEFAULT_MAX_RULE_ITERATIONS,
-    max_data_self_review_iterations: int = DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS,
-    max_rule_self_review_iterations: int = DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS,
     runner: Callable[..., Any] | None = None,
     data_ontology_file: Path | str = DEFAULT_DATA_ONTOLOGY,
     rule_ontology_file: Path | str = DEFAULT_RULE_ONTOLOGY,
@@ -700,8 +684,6 @@ def run_data_rule_pipeline(
         data_ontology=data_ontology,
         data_ontology_hash=data_ontology_hash,
         output_dir=data_rule_dir,
-        max_iterations=max_data_iterations,
-        max_self_review_iterations=max_data_self_review_iterations,
         progress=progress,
     )
     write_text(data_rule_dir / "data_final.ttl", data_turtle)
@@ -744,8 +726,6 @@ def run_data_rule_pipeline(
         data_turtle=data_turtle,
         rule_ontology_hash=rule_ontology_hash,
         output_dir=data_rule_dir,
-        max_iterations=max_rule_iterations,
-        max_self_review_iterations=max_rule_self_review_iterations,
         progress=progress,
     )
     write_text(data_rule_dir / "rule_final.ttl", rule_turtle)
@@ -793,10 +773,10 @@ def run_data_rule_pipeline(
         "rule_ontology_hash": rule_ontology_hash,
         "data_shapes_hash": data_shapes_hash,
         "rule_shapes_hash": rule_shapes_hash,
-        "max_data_iterations": max_data_iterations,
-        "max_rule_iterations": max_rule_iterations,
-        "max_data_self_review_iterations": max_data_self_review_iterations,
-        "max_rule_self_review_iterations": max_rule_self_review_iterations,
+        "max_data_iterations": MAX_REVISION_ITERATIONS,
+        "max_rule_iterations": MAX_REVISION_ITERATIONS,
+        "max_data_self_review_iterations": MAX_REVISION_ITERATIONS,
+        "max_rule_self_review_iterations": MAX_REVISION_ITERATIONS,
         "data_self_review_status": data_self_review.status.value,
         "rule_self_review_status": rule_self_review.status.value,
         "final_status": final_status,
