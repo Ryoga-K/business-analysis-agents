@@ -35,6 +35,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - PDFとScenario RDFのどちらにもない業務内容は推測しない。
 - ontologyは事前定義TTLから読み込み、実行中は変更しない。
 - SHACL Shapesは各raw RDFの生成後にAIが1回だけ生成し、ハッシュ固定してrevisionではRDF本体だけを修正する。
+- Workflow/Data/RuleはSHACL適合後にPDF・Scenario RDF・対象RDFをAIでSelf-Reviewし、意味的な欠落・矛盾・誤抽出があればRDFだけを再修正する。
 - Cross-SHACLも1回だけ生成・固定し、整合性の適合判定は統合Graphに対するpySHACLで行う。
 - End-to-End ControllerはAI判断を行わず、既存pipelineを決められた順序で呼び出す。
 - Consistencyの不適合は実行エラーとせず、評価結果を保存して正常終了する。
@@ -130,8 +131,8 @@ python -m business_analysis_agents run --pdf inputs\sample.pdf
 ```text
 PDF
  └─ Scenario RDF
-     └─ Workflow RDF + individual validation
-         └─ Data RDF / Rule RDF + individual validation
+     └─ Workflow RDF + individual validation + Self-Review
+         └─ Data RDF / Rule RDF + individual validation + Self-Review
              └─ Cross-SHACL validation + Consistency evaluation
                  └─ Human Review
 ```
@@ -140,8 +141,11 @@ PDF
 
 - `outputs/scenario/scenario_final.ttl`
 - `outputs/workflow/workflow_final.ttl`
+- `outputs/workflow/workflow_self_review.json`
 - `outputs/data_rule/data_final.ttl`
 - `outputs/data_rule/rule_final.ttl`
+- `outputs/data_rule/data_self_review.json`
+- `outputs/data_rule/rule_self_review.json`
 - `outputs/consistency/consistency_evaluation.json`
 - `outputs/human_review/human_review.json`
 - `outputs/controller/run_summary.json`
@@ -187,6 +191,9 @@ outputs/workflow/
 - `workflow_shapes_generated.ttl`
 - `workflow_validation.json`
 - `workflow_revision_history.json`
+- `workflow_self_review.json`
+
+Self-Reviewによる修正回数は`--max-self-review-iterations`で変更できます。Self-Review revision後も、raw RDF生成後に作成した同じ`workflow_shapes_generated.ttl`で再検証します。
 
 固定Ontology、生成SHACLの検証結果やAgent出力などの詳細ファイルも保存する場合:
 
@@ -225,10 +232,14 @@ outputs/data_rule/
 - `data_shapes_generated.ttl`
 - `data_validation.json`
 - `data_revision_history.json`
+- `data_self_review.json`
 - `rule_final.ttl`
 - `rule_shapes_generated.ttl`
 - `rule_validation.json`
 - `rule_revision_history.json`
+- `rule_self_review.json`
+
+Self-Reviewによる修正回数は`--max-data-self-review-iterations`と`--max-rule-self-review-iterations`で個別に変更できます。
 
 ### 6. Workflow / Data / Rule RDF間のCross Reviewを実行
 
@@ -314,6 +325,7 @@ PDFから抽出したページ番号付きテキストと固定 `ontology/scenar
 - `workflow_generation`: PDFとScenario RDFからWorkflow RDFを生成
 - `workflow_shacl_generation`: raw Workflow RDFと固定OntologyからSHACL Shapesを生成
 - `workflow_revision`: PDF、Scenario RDF、検証結果に基づきWorkflow RDFだけを修正
+- `workflow_self_review`: PDF、Scenario RDF、現在のWorkflow RDFを比較し、意味的な欠落・矛盾・誤抽出を構造化して評価
 
 ### 関連データ・ルール抽出Agent
 
@@ -322,9 +334,11 @@ PDFから抽出したページ番号付きテキストと固定 `ontology/scenar
 - `data_generation`: PDFとScenario RDFからData RDFを生成
 - `data_shacl_generation`: raw Data RDFと固定Data OntologyからData SHACLを生成
 - `data_revision`: PDF、Scenario RDF、検証結果に基づきData RDFだけを修正
+- `data_self_review`: PDF、Scenario RDF、現在のData RDFを比較して意味的に評価
 - `rule_generation`: PDF、Scenario RDF、検証済みData RDFからRule RDFを生成
 - `rule_shacl_generation`: raw Rule RDFと固定Rule OntologyからRule SHACLを生成
 - `rule_revision`: PDF、Scenario RDF、検証結果に基づきRule RDFだけを修正
+- `rule_self_review`: PDF、Scenario RDF、検証済みData RDF、現在のRule RDFを比較して意味的に評価
 
 ### Consistency Agent
 
@@ -361,7 +375,7 @@ python -m pytest
 直近の確認結果:
 
 ```text
-60 passed
+63 passed
 ```
 
 ## 未実装

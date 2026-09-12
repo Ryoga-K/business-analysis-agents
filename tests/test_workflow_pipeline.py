@@ -15,6 +15,12 @@ from business_analysis_agents.agents.workflow import (
     run_workflow_agent,
 )
 from business_analysis_agents.models import (
+    AgentName,
+    RdfKind,
+    SelfReviewCategory,
+    SelfReviewEvidence,
+    SelfReviewFinding,
+    SelfReviewResult,
     WorkflowAgentMode,
     WorkflowAgentOutput,
 )
@@ -147,8 +153,21 @@ inst:check-order a prov:Activity ;
 """.strip()
 
 
-def test_workflow_agent_is_single_agent_with_three_modes(monkeypatch) -> None:
-    """One Workflow Agent handles RDF generation, SHACL generation, and revision."""
+def _workflow_review(
+    passed: bool = True,
+    findings: list[SelfReviewFinding] | None = None,
+) -> SelfReviewResult:
+    return SelfReviewResult(
+        reviewer_agent=AgentName.WORKFLOW,
+        rdf_kind=RdfKind.WORKFLOW,
+        passed=passed,
+        findings=findings or [],
+        summary="No semantic issues." if passed else "A workflow step is missing.",
+    )
+
+
+def test_workflow_agent_is_single_agent_with_four_modes(monkeypatch) -> None:
+    """One Workflow Agent handles generation, SHACL, revision, and Self-Review."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     calls: list[str] = []
@@ -171,6 +190,13 @@ def test_workflow_agent_is_single_agent_with_three_modes(monkeypatch) -> None:
                     workflow_shacl_turtle=SHAPES_TTL,
                 )
             )
+        if "workflow_self_review" in prompt:
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SELF_REVIEW,
+                    self_review_result=_workflow_review(),
+                )
+            )
         return SimpleNamespace(
             final_output=WorkflowAgentOutput(
                 mode=WorkflowAgentMode.WORKFLOW_REVISION,
@@ -188,7 +214,7 @@ def test_workflow_agent_is_single_agent_with_three_modes(monkeypatch) -> None:
         assert output.mode == mode
 
     assert build_workflow_agent("gpt-test").name == WORKFLOW_AGENT_NAME
-    assert len(calls) == 3
+    assert len(calls) == 4
 
 
 def test_fixed_ontology_and_shapes_can_be_validated() -> None:
@@ -367,6 +393,16 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
                     workflow_shacl_turtle=SHAPES_TTL,
                 )
             )
+        if "workflow_self_review" in prompt:
+            call_order.append("workflow_self_review")
+            assert "current_workflow_rdf" in prompt
+            assert "PDF detail: a clerk checks the order amount." in prompt
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SELF_REVIEW,
+                    self_review_result=_workflow_review(),
+                )
+            )
         call_order.append("workflow_generation")
         assert "source_document" in prompt
         assert "PDF detail: a clerk checks the order amount." in prompt
@@ -388,13 +424,18 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
         ontology_file=ontology_file,
     )
 
-    assert call_order == ["workflow_generation", "workflow_shacl_generation"]
+    assert call_order == [
+        "workflow_generation",
+        "workflow_shacl_generation",
+        "workflow_self_review",
+    ]
     assert result["final_status"] == "completed"
     assert {path.name for path in workflow_dir.iterdir()} == {
         "workflow_final.ttl",
         "workflow_shapes_generated.ttl",
         "workflow_validation.json",
         "workflow_revision_history.json",
+        "workflow_self_review.json",
     }
     assert json.loads(
         (workflow_dir / "workflow_validation.json").read_text(encoding="utf-8")
@@ -402,6 +443,9 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     assert json.loads(
         (workflow_dir / "workflow_revision_history.json").read_text(encoding="utf-8")
     ) == []
+    assert json.loads(
+        (workflow_dir / "workflow_self_review.json").read_text(encoding="utf-8")
+    )["status"] == "passed"
 
 
 def test_pipeline_saves_generated_shacl_before_rejecting_invalid_turtle(
@@ -424,6 +468,13 @@ def test_pipeline_saves_generated_shacl_before_rejecting_invalid_turtle(
                 final_output=WorkflowAgentOutput(
                     mode=WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
                     workflow_shacl_turtle=invalid_shapes,
+                )
+            )
+        if "workflow_self_review" in prompt:
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SELF_REVIEW,
+                    self_review_result=_workflow_review(),
                 )
             )
         return SimpleNamespace(
@@ -515,6 +566,9 @@ def test_pipeline_runs_revision_until_max_iterations(monkeypatch, tmp_path) -> N
     assert not json.loads(
         (workflow_dir / "workflow_validation.json").read_text(encoding="utf-8")
     )["conforms"]
+    assert json.loads(
+        (workflow_dir / "workflow_self_review.json").read_text(encoding="utf-8")
+    )["status"] == "shacl_failed"
 
 
 def test_pipeline_saves_detailed_artifacts_in_debug_mode(monkeypatch, tmp_path) -> None:
@@ -532,6 +586,13 @@ def test_pipeline_saves_detailed_artifacts_in_debug_mode(monkeypatch, tmp_path) 
                 final_output=WorkflowAgentOutput(
                     mode=WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
                     workflow_shacl_turtle=SHAPES_TTL,
+                )
+            )
+        if "workflow_self_review" in prompt:
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SELF_REVIEW,
+                    self_review_result=_workflow_review(),
                 )
             )
         return SimpleNamespace(
@@ -557,6 +618,171 @@ def test_pipeline_saves_detailed_artifacts_in_debug_mode(monkeypatch, tmp_path) 
     assert (workflow_dir / "workflow_ontology_history.json").exists()
     assert (workflow_dir / "workflow_ontology_v0_1.ttl").exists()
     assert (workflow_dir / "workflow_shapes_generated.ttl").exists()
+
+
+def test_self_review_revises_rdf_and_reuses_generated_shacl(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A semantic finding revises only RDF before SHACL and Self-Review rerun."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
+    ontology_file, _ = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
+    revised_turtle = VALID_WORKFLOW_TTL.replace("Check order", "Check order amount")
+    shacl_calls = 0
+    review_calls = 0
+    revision_calls = 0
+
+    finding = SelfReviewFinding(
+        category=SelfReviewCategory.MISSING_INFORMATION,
+        target="inst:activity-S1",
+        description="The amount check is missing from the step name.",
+        evidence=[
+            SelfReviewEvidence(
+                source="pdf",
+                locator="page 1",
+                excerpt="a clerk checks the order amount",
+            )
+        ],
+        revision_instruction="Include the documented amount check.",
+    )
+
+    def fake_runner(_agent, prompt):
+        nonlocal shacl_calls, review_calls, revision_calls
+        if "workflow_shacl_generation" in prompt:
+            shacl_calls += 1
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
+                    workflow_shacl_turtle=SHAPES_TTL,
+                )
+            )
+        if "workflow_self_review" in prompt:
+            review_calls += 1
+            assert "PDF detail: a clerk checks the order amount." in prompt
+            assert "Order handling" in prompt
+            assert "current_workflow_rdf" in prompt
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SELF_REVIEW,
+                    self_review_result=(
+                        _workflow_review(False, [finding])
+                        if review_calls == 1
+                        else _workflow_review()
+                    ),
+                )
+            )
+        if "workflow_revision" in prompt:
+            revision_calls += 1
+            assert "self_review_result" in prompt
+            assert "Include the documented amount check." in prompt
+            assert "wf:ActivityShape" in prompt
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_REVISION,
+                    workflow_rdf_turtle=revised_turtle,
+                )
+            )
+        return SimpleNamespace(
+            final_output=WorkflowAgentOutput(
+                mode=WorkflowAgentMode.WORKFLOW_GENERATION,
+                workflow_rdf_turtle=VALID_WORKFLOW_TTL,
+            )
+        )
+
+    output_dir = tmp_path / "workflow"
+    result = run_workflow_pipeline(
+        scenario_file,
+        model="gpt-test",
+        pdf_file=pdf_file,
+        output_dir=output_dir,
+        runner=fake_runner,
+        ontology_file=ontology_file,
+    )
+
+    assert result["final_status"] == "completed"
+    assert shacl_calls == 1
+    assert review_calls == 2
+    assert revision_calls == 1
+    assert (output_dir / "workflow_final.ttl").read_text(
+        encoding="utf-8"
+    ) == revised_turtle
+    review_history = json.loads(
+        (output_dir / "workflow_self_review.json").read_text(encoding="utf-8")
+    )
+    assert review_history["status"] == "passed"
+    assert len(review_history["iterations"]) == 2
+    revision_history = json.loads(
+        (output_dir / "workflow_revision_history.json").read_text(encoding="utf-8")
+    )
+    assert revision_history[0]["phase"] == "self_review_revision"
+
+
+def test_self_review_stops_at_configured_revision_limit(monkeypatch, tmp_path) -> None:
+    """An unresolved semantic finding ends as needs_review without an infinite loop."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
+    ontology_file, _ = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
+    finding = SelfReviewFinding(
+        category=SelfReviewCategory.MISSING_INFORMATION,
+        description="A documented workflow detail is missing.",
+        evidence=[
+            SelfReviewEvidence(
+                source="pdf",
+                locator="page 1",
+                excerpt="checks the order amount",
+            )
+        ],
+        revision_instruction="Add the documented workflow detail.",
+    )
+
+    def fake_runner(_agent, prompt):
+        if "workflow_shacl_generation" in prompt:
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
+                    workflow_shacl_turtle=SHAPES_TTL,
+                )
+            )
+        if "workflow_self_review" in prompt:
+            return SimpleNamespace(
+                final_output=WorkflowAgentOutput(
+                    mode=WorkflowAgentMode.WORKFLOW_SELF_REVIEW,
+                    self_review_result=_workflow_review(False, [finding]),
+                )
+            )
+        if "workflow_revision" in prompt:
+            pytest.fail("Self-Review revision must not run when its limit is zero")
+        return SimpleNamespace(
+            final_output=WorkflowAgentOutput(
+                mode=WorkflowAgentMode.WORKFLOW_GENERATION,
+                workflow_rdf_turtle=VALID_WORKFLOW_TTL,
+            )
+        )
+
+    output_dir = tmp_path / "workflow"
+    result = run_workflow_pipeline(
+        scenario_file,
+        model="gpt-test",
+        pdf_file=pdf_file,
+        output_dir=output_dir,
+        max_self_review_iterations=0,
+        runner=fake_runner,
+        ontology_file=ontology_file,
+    )
+
+    assert result["final_status"] == "needs_review"
+    history = json.loads(
+        (output_dir / "workflow_self_review.json").read_text(encoding="utf-8")
+    )
+    assert history["status"] == "max_iterations"
+    assert len(history["iterations"]) == 1
 
 
 def test_pipeline_does_not_autofill_business_triples(monkeypatch, tmp_path) -> None:

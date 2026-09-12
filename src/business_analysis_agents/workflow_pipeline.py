@@ -15,7 +15,11 @@ from business_analysis_agents.fixed_resources import (
     load_fixed_turtle,
 )
 from business_analysis_agents.models import (
+    AgentName,
     OntologyValidationResult,
+    RdfKind,
+    SelfReviewResult,
+    SelfReviewRunStatus,
     WorkflowAgentMode,
     WorkflowAgentOutput,
     WorkflowRdfValidationResult,
@@ -26,9 +30,11 @@ from business_analysis_agents.rdf_validation import (
     validate_workflow_rdf,
     validation_feedback,
 )
+from business_analysis_agents.self_review import run_self_review_loop
 
 
 DEFAULT_MAX_WORKFLOW_ITERATIONS = 3
+DEFAULT_MAX_WORKFLOW_SELF_REVIEW_ITERATIONS = 3
 DEBUG_OUTPUT_FILENAMES = (
     "workflow_ontology_v0_1.ttl",
     "workflow_shapes_v0_1.ttl",
@@ -97,6 +103,15 @@ def _require_text(value: str | None, field_name: str) -> str:
     return value
 
 
+def _require_self_review(output: WorkflowAgentOutput) -> SelfReviewResult:
+    result = output.self_review_result
+    if result is None:
+        raise ValueError("Workflow Self-Review output did not include self_review_result.")
+    if output.workflow_rdf_turtle or output.workflow_shacl_turtle:
+        raise ValueError("Workflow Self-Review must not generate RDF or SHACL Turtle.")
+    return result
+
+
 def _assert_fixed_hashes(
     ontology_turtle: str,
     shacl_turtle: str,
@@ -124,6 +139,7 @@ def run_workflow_pipeline(
     pdf_file: Path | str,
     output_dir: Path | str = "outputs/workflow",
     max_workflow_iterations: int = DEFAULT_MAX_WORKFLOW_ITERATIONS,
+    max_self_review_iterations: int = DEFAULT_MAX_WORKFLOW_SELF_REVIEW_ITERATIONS,
     runner: Callable[..., Any] | None = None,
     ontology_file: Path | str = DEFAULT_WORKFLOW_ONTOLOGY,
     save_debug_outputs: bool = False,
@@ -257,17 +273,116 @@ def run_workflow_pipeline(
         revision_history.append(
             {
                 "iteration": iteration,
+                "phase": "shacl_revision",
                 "output": _output_payload(revision_output),
                 "validation": _validation_payload(validation),
             }
         )
 
-    final_status = "completed" if validation.conforms else "needs_review"
+    def assert_fixed_resources() -> None:
+        _assert_fixed_hashes(
+            ontology_turtle,
+            shacl_turtle,
+            ontology_hash,
+            shapes_hash,
+        )
+
+    def review_rdf(current_rdf: str, review_iteration: int) -> SelfReviewResult:
+        review_output = run_workflow_agent(
+            WorkflowAgentMode.WORKFLOW_SELF_REVIEW,
+            {
+                "scenario_rdf_turtle": scenario_turtle,
+                "source_document": source_document_payload,
+                "ontology_turtle": ontology_turtle,
+                "workflow_shacl_turtle": shacl_turtle,
+                "current_workflow_rdf": current_rdf,
+                "current_validation": _validation_payload(validation),
+                "self_review_iteration": review_iteration,
+                "ontology_hash": ontology_hash,
+                "shapes_hash": shapes_hash,
+            },
+            model=model,
+            runner=runner,
+        )
+        return _require_self_review(review_output)
+
+    def revise_from_self_review(
+        current_rdf: str,
+        self_review_result: SelfReviewResult,
+        current_validation: WorkflowRdfValidationResult,
+        iteration: int,
+    ) -> tuple[str, dict[str, Any], WorkflowAgentOutput]:
+        revision_output = run_workflow_agent(
+            WorkflowAgentMode.WORKFLOW_REVISION,
+            {
+                "scenario_rdf_turtle": scenario_turtle,
+                "source_document": source_document_payload,
+                "ontology_turtle": ontology_turtle,
+                "shacl_turtle": shacl_turtle,
+                "previous_workflow_rdf": current_rdf,
+                "self_review_result": self_review_result.model_dump(mode="json"),
+                "validation_feedback": validation_feedback(current_validation),
+                "previous_validation": _validation_payload(current_validation),
+                "revision_history": revision_history,
+                "ontology_hash": ontology_hash,
+                "shapes_hash": shapes_hash,
+            },
+            model=model,
+            runner=runner,
+        )
+        revised_rdf = _require_text(
+            revision_output.workflow_rdf_turtle,
+            "workflow_rdf_turtle",
+        )
+        return revised_rdf, _output_payload(revision_output), revision_output
+
+    def validate_revised_rdf(
+        revised_rdf: str,
+        iteration: int,
+    ) -> WorkflowRdfValidationResult:
+        return validate_workflow_rdf(
+            revised_rdf,
+            ontology_turtle,
+            shacl_turtle,
+            iteration=iteration,
+        )
+
+    (
+        workflow_turtle,
+        validation,
+        self_review_history,
+        self_review_revision_output,
+    ) = run_self_review_loop(
+        rdf_turtle=workflow_turtle,
+        validation=validation,
+        rdf_kind=RdfKind.WORKFLOW,
+        reviewer_agent=AgentName.WORKFLOW,
+        max_revision_iterations=max_self_review_iterations,
+        revision_history=revision_history,
+        review_rdf=review_rdf,
+        revise_rdf=revise_from_self_review,
+        validate_rdf=validate_revised_rdf,
+        serialize_validation=_validation_payload,
+        assert_fixed_resources=assert_fixed_resources,
+    )
+    if self_review_revision_output is not None:
+        final_output = self_review_revision_output
+
+    final_status = (
+        "completed"
+        if validation.conforms
+        and self_review_history.status is SelfReviewRunStatus.PASSED
+        else "needs_review"
+    )
     if not save_debug_outputs:
         _remove_debug_outputs(workflow_dir)
     write_text(workflow_dir / "workflow_final.ttl", workflow_turtle)
     write_json(workflow_dir / "workflow_validation.json", _validation_payload(validation))
     write_json(workflow_dir / "workflow_revision_history.json", revision_history)
+    write_json(
+        workflow_dir / "workflow_self_review.json",
+        self_review_history.model_dump(mode="json"),
+    )
 
     metadata = {
         "scenario_file": str(scenario_path),
@@ -281,6 +396,8 @@ def run_workflow_pipeline(
         "ontology_hash": ontology_hash,
         "shapes_hash": shapes_hash,
         "max_workflow_iterations": max_workflow_iterations,
+        "max_self_review_iterations": max_self_review_iterations,
+        "self_review_status": self_review_history.status.value,
         "final_status": final_status,
     }
     if save_debug_outputs:
@@ -295,5 +412,6 @@ def run_workflow_pipeline(
         "final_status": final_status,
         "ontology_validation": _ontology_validation_payload(ontology_validation),
         "workflow_validation": _validation_payload(validation),
+        "workflow_self_review": self_review_history.model_dump(mode="json"),
         "metadata": metadata,
     }

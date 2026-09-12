@@ -90,10 +90,36 @@ workflow_rdf_turtleだけを修正してください。
 
 PDF本文、Scenario RDF、RDFLibのparse error、語彙検証結果、SHACL検証結果、
 現在のWorkflow RDF、修正履歴を使ってWorkflow RDFを修正してください。
+入力にself_review_resultがある場合は、各findingのevidenceとrevision_instructionも使ってください。
+Self-Review findingでもPDF本文またはScenario RDFに根拠が確認できない変更は行わないでください。
 SHACL違反を解消するためにPDF本文に根拠のない情報を追加しないでください。
 根拠のない業務仮定を置かなければ修正できない問題は、
 remaining_violationsとunresolved_itemsに残してください。
 workflow_rdf_turtleは必須です。
+""".strip()
+
+WORKFLOW_SELF_REVIEW_INSTRUCTIONS = """
+Mode: workflow_self_review
+PDF本文、Scenario RDF、現在のWorkflow RDFを比較し、構文やSHACLではなく内容の意味的な
+整合性と網羅性を自己評価してください。
+
+確認事項:
+- PDFまたはScenario RDFにある重要な業務ステップが欠落していないか。
+- 実行主体、順序、分岐、条件、例外、入出力の対応を誤っていないか。
+- PDFにもScenario RDFにもない活動や関係を追加していないか。
+- 同一対象を不必要に重複抽出していないか。
+- PDFとScenario RDFが矛盾する場合はPDF本文を優先し、矛盾自体をfindingにすること。
+
+出力ルール:
+- self_review_resultを必須で出力し、Workflow RDFやSHACLは出力しないでください。
+- 問題がなければpassed=true、findings=[]としてください。
+- 問題があればpassed=falseとし、category、target、description、evidence、
+  revision_instructionをfindingごとに記録してください。
+- reviewer_agent=workflow、rdf_kind=workflowとしてください。
+- evidenceにはsourceをPDFまたはScenario RDFとし、ページ番号やURI等をlocator、
+  根拠となる記述をexcerptに入れてください。
+- PDFにもScenario RDFにも根拠のない推測をfindingやrevision_instructionに含めないでください。
+- OntologyやSHACLの変更を提案しないでください。
 """.strip()
 
 
@@ -129,6 +155,8 @@ def _mode_instructions(mode: WorkflowAgentMode) -> str:
         return WORKFLOW_GENERATION_INSTRUCTIONS
     if mode is WorkflowAgentMode.WORKFLOW_SHACL_GENERATION:
         return WORKFLOW_SHACL_GENERATION_INSTRUCTIONS
+    if mode is WorkflowAgentMode.WORKFLOW_SELF_REVIEW:
+        return WORKFLOW_SELF_REVIEW_INSTRUCTIONS
     return WORKFLOW_REVISION_INSTRUCTIONS
 
 

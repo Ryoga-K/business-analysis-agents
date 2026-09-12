@@ -16,11 +16,16 @@ from business_analysis_agents.agents.data_rule import (
 )
 from business_analysis_agents.data_rule_pipeline import run_data_rule_pipeline
 from business_analysis_agents.models import (
+    AgentName,
     DataRuleAgentMode,
     DataRuleAgentOutput,
+    RdfKind,
+    SelfReviewCategory,
+    SelfReviewEvidence,
+    SelfReviewFinding,
+    SelfReviewResult,
 )
 from business_analysis_agents.rdf_validation import validate_ontology_and_shapes, validate_rdf
-from business_analysis_agents.models import RdfKind
 
 
 ONTOLOGY_TTL = """
@@ -155,8 +160,23 @@ inst:submit-application a prov:Activity ;
 """.strip()
 
 
-def test_data_rule_agent_is_single_agent_with_six_modes(monkeypatch) -> None:
-    """One related data/rule agent is reused for RDF, SHACL, and revision modes."""
+def _semantic_review(
+    agent: AgentName,
+    rdf_kind: RdfKind,
+    passed: bool = True,
+    findings: list[SelfReviewFinding] | None = None,
+) -> SelfReviewResult:
+    return SelfReviewResult(
+        reviewer_agent=agent,
+        rdf_kind=rdf_kind,
+        passed=passed,
+        findings=findings or [],
+        summary="No semantic issues." if passed else "Document detail is missing.",
+    )
+
+
+def test_data_rule_agent_is_single_agent_with_eight_modes(monkeypatch) -> None:
+    """One related data/rule agent handles generation through Self-Review."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     calls: list[str] = []
@@ -179,11 +199,18 @@ def test_data_rule_agent_is_single_agent_with_six_modes(monkeypatch) -> None:
                     data_rdf_turtle=VALID_DATA_TTL,
                 )
             )
-        if "data_shacl_generation" in prompt:
+        if prompt.startswith("Mode: data_shacl_generation"):
             return SimpleNamespace(
                 final_output=DataRuleAgentOutput(
                     mode=DataRuleAgentMode.DATA_SHACL_GENERATION,
                     data_shacl_turtle=DATA_SHAPES_TTL,
+                )
+            )
+        if "data_self_review" in prompt:
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SELF_REVIEW,
+                    self_review_result=_semantic_review(AgentName.DATA, RdfKind.DATA),
                 )
             )
         if "rule_revision" in prompt:
@@ -193,11 +220,18 @@ def test_data_rule_agent_is_single_agent_with_six_modes(monkeypatch) -> None:
                     rule_rdf_turtle=VALID_RULE_TTL,
                 )
             )
-        if "rule_shacl_generation" in prompt:
+        if prompt.startswith("Mode: rule_shacl_generation"):
             return SimpleNamespace(
                 final_output=DataRuleAgentOutput(
                     mode=DataRuleAgentMode.RULE_SHACL_GENERATION,
                     rule_shacl_turtle=RULE_SHAPES_TTL,
+                )
+            )
+        if "rule_self_review" in prompt:
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.RULE_SELF_REVIEW,
+                    self_review_result=_semantic_review(AgentName.RULE, RdfKind.RULE),
                 )
             )
         return SimpleNamespace(
@@ -217,7 +251,7 @@ def test_data_rule_agent_is_single_agent_with_six_modes(monkeypatch) -> None:
         assert output.mode == mode
 
     assert build_data_rule_agent("gpt-test").name == DATA_RULE_AGENT_NAME
-    assert len(calls) == 6
+    assert len(calls) == 8
 
 
 @pytest.mark.parametrize(
@@ -368,6 +402,15 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
                     data_shacl_turtle=DATA_SHAPES_TTL,
                 )
             )
+        if prompt.startswith("Mode: data_self_review"):
+            call_order.append("data_self_review")
+            assert "current_data_rdf" in prompt
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SELF_REVIEW,
+                    self_review_result=_semantic_review(AgentName.DATA, RdfKind.DATA),
+                )
+            )
         if "rule_shacl_generation" in prompt:
             call_order.append("rule_shacl_generation")
             assert "rule_rdf_raw" in prompt
@@ -376,6 +419,16 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
                 final_output=DataRuleAgentOutput(
                     mode=DataRuleAgentMode.RULE_SHACL_GENERATION,
                     rule_shacl_turtle=RULE_SHAPES_TTL,
+                )
+            )
+        if prompt.startswith("Mode: rule_self_review"):
+            call_order.append("rule_self_review")
+            assert "current_rule_rdf" in prompt
+            assert "validated_data_rdf" in prompt
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.RULE_SELF_REVIEW,
+                    self_review_result=_semantic_review(AgentName.RULE, RdfKind.RULE),
                 )
             )
         assert "source_document" in prompt
@@ -412,8 +465,10 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
     assert call_order == [
         "data_generation",
         "data_shacl_generation",
+        "data_self_review",
         "rule_generation",
         "rule_shacl_generation",
+        "rule_self_review",
     ]
     assert result["final_status"] == "completed"
     assert {path.name for path in (tmp_path / "data_rule").iterdir()} == {
@@ -421,10 +476,12 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
         "data_shapes_generated.ttl",
         "data_validation.json",
         "data_revision_history.json",
+        "data_self_review.json",
         "rule_final.ttl",
         "rule_shapes_generated.ttl",
         "rule_validation.json",
         "rule_revision_history.json",
+        "rule_self_review.json",
     }
 
 
@@ -443,6 +500,13 @@ def test_pipeline_saves_data_outputs_before_rule_processing(monkeypatch, tmp_pat
                 final_output=DataRuleAgentOutput(
                     mode=DataRuleAgentMode.DATA_SHACL_GENERATION,
                     data_shacl_turtle=DATA_SHAPES_TTL,
+                )
+            )
+        if "data_self_review" in prompt:
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SELF_REVIEW,
+                    self_review_result=_semantic_review(AgentName.DATA, RdfKind.DATA),
                 )
             )
         assert "source_document" in prompt
@@ -473,6 +537,7 @@ def test_pipeline_saves_data_outputs_before_rule_processing(monkeypatch, tmp_pat
         "data_shapes_generated.ttl",
         "data_validation.json",
         "data_revision_history.json",
+        "data_self_review.json",
     }
 
 
@@ -501,6 +566,13 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
                     data_shacl_turtle=DATA_SHAPES_TTL,
                 )
             )
+        if "data_self_review" in prompt:
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SELF_REVIEW,
+                    self_review_result=_semantic_review(AgentName.DATA, RdfKind.DATA),
+                )
+            )
         if "rule_shacl_generation" in prompt:
             rule_shacl_calls += 1
             assert "inst:rule-eligibility" in prompt
@@ -510,11 +582,18 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
                     rule_shacl_turtle=RULE_SHAPES_TTL,
                 )
             )
+        if "rule_self_review" in prompt:
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.RULE_SELF_REVIEW,
+                    self_review_result=_semantic_review(AgentName.RULE, RdfKind.RULE),
+                )
+            )
         assert "source_document" in prompt
         assert "PDF detail: amount must be at least 1000 JPY." in prompt
         assert "scenario_rdf_turtle" in prompt
         assert "Application handling" in prompt
-        if "data_revision" in prompt:
+        if prompt.startswith("Mode: data_revision"):
             data_revision_calls += 1
             assert "dr:DataEntityShape" in prompt
             return SimpleNamespace(
@@ -530,7 +609,7 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
                     data_rdf_turtle=INVALID_DATA_TTL,
                 )
             )
-        if "rule_revision" in prompt:
+        if prompt.startswith("Mode: rule_revision"):
             rule_revision_calls += 1
             assert "dr:BusinessRuleShape" in prompt
             return SimpleNamespace(
@@ -566,3 +645,168 @@ def test_pipeline_runs_data_and_rule_revision_until_valid(monkeypatch, tmp_path)
     assert "inst:data-application a dr:DataEntity" in (
         tmp_path / "data_rule" / "data_final.ttl"
     ).read_text(encoding="utf-8")
+
+
+def test_data_and_rule_self_reviews_drive_separate_revisions(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Data and Rule findings revise each RDF and keep each generated SHACL fixed."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
+    fixed_files = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
+    revised_data = VALID_DATA_TTL.replace("Application form", "Application amount form")
+    revised_rule = VALID_RULE_TTL.replace(
+        "Application form is submitted.",
+        "Application amount is at least 1000 JPY.",
+    )
+    calls = {
+        "data_shapes": 0,
+        "rule_shapes": 0,
+        "data_review": 0,
+        "rule_review": 0,
+        "data_revision": 0,
+        "rule_revision": 0,
+    }
+    evidence = [
+        SelfReviewEvidence(
+            source="pdf",
+            locator="page 1",
+            excerpt="amount must be at least 1000 JPY",
+        )
+    ]
+    data_finding = SelfReviewFinding(
+        category=SelfReviewCategory.MISSING_INFORMATION,
+        target="inst:data-application",
+        description="The amount field is missing.",
+        evidence=evidence,
+        revision_instruction="Add the documented amount detail.",
+    )
+    rule_finding = SelfReviewFinding(
+        category=SelfReviewCategory.MISINTERPRETATION,
+        target="inst:rule-eligibility",
+        description="The numeric eligibility condition is missing.",
+        evidence=evidence,
+        revision_instruction="Represent the documented 1000 JPY condition.",
+    )
+
+    def fake_runner(_agent, prompt):
+        if prompt.startswith("Mode: data_shacl_generation"):
+            calls["data_shapes"] += 1
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SHACL_GENERATION,
+                    data_shacl_turtle=DATA_SHAPES_TTL,
+                )
+            )
+        if prompt.startswith("Mode: rule_shacl_generation"):
+            calls["rule_shapes"] += 1
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.RULE_SHACL_GENERATION,
+                    rule_shacl_turtle=RULE_SHAPES_TTL,
+                )
+            )
+        if prompt.startswith("Mode: data_self_review"):
+            calls["data_review"] += 1
+            assert "PDF detail: amount must be at least 1000 JPY." in prompt
+            assert "current_data_rdf" in prompt
+            result = (
+                _semantic_review(AgentName.DATA, RdfKind.DATA, False, [data_finding])
+                if calls["data_review"] == 1
+                else _semantic_review(AgentName.DATA, RdfKind.DATA)
+            )
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SELF_REVIEW,
+                    self_review_result=result,
+                )
+            )
+        if prompt.startswith("Mode: rule_self_review"):
+            calls["rule_review"] += 1
+            assert "validated_data_rdf" in prompt
+            assert "Application amount form" in prompt
+            result = (
+                _semantic_review(AgentName.RULE, RdfKind.RULE, False, [rule_finding])
+                if calls["rule_review"] == 1
+                else _semantic_review(AgentName.RULE, RdfKind.RULE)
+            )
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.RULE_SELF_REVIEW,
+                    self_review_result=result,
+                )
+            )
+        if prompt.startswith("Mode: data_revision"):
+            calls["data_revision"] += 1
+            assert "Add the documented amount detail." in prompt
+            assert "dr:DataEntityShape" in prompt
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_REVISION,
+                    data_rdf_turtle=revised_data,
+                )
+            )
+        if prompt.startswith("Mode: rule_revision"):
+            calls["rule_revision"] += 1
+            assert "Represent the documented 1000 JPY condition." in prompt
+            assert "dr:BusinessRuleShape" in prompt
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.RULE_REVISION,
+                    rule_rdf_turtle=revised_rule,
+                )
+            )
+        if prompt.startswith("Mode: data_generation"):
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_GENERATION,
+                    data_rdf_turtle=VALID_DATA_TTL,
+                )
+            )
+        return SimpleNamespace(
+            final_output=DataRuleAgentOutput(
+                mode=DataRuleAgentMode.RULE_GENERATION,
+                rule_rdf_turtle=VALID_RULE_TTL,
+            )
+        )
+
+    output_dir = tmp_path / "data_rule"
+    result = run_data_rule_pipeline(
+        scenario_file,
+        model="gpt-test",
+        pdf_file=pdf_file,
+        output_dir=output_dir,
+        runner=fake_runner,
+        data_ontology_file=fixed_files[0],
+        rule_ontology_file=fixed_files[1],
+    )
+
+    assert result["final_status"] == "completed"
+    assert calls == {
+        "data_shapes": 1,
+        "rule_shapes": 1,
+        "data_review": 2,
+        "rule_review": 2,
+        "data_revision": 1,
+        "rule_revision": 1,
+    }
+    assert (output_dir / "data_final.ttl").read_text(encoding="utf-8") == revised_data
+    assert (output_dir / "rule_final.ttl").read_text(encoding="utf-8") == revised_rule
+    for rdf_kind in ("data", "rule"):
+        review = json.loads(
+            (output_dir / f"{rdf_kind}_self_review.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        history = json.loads(
+            (output_dir / f"{rdf_kind}_revision_history.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert review["status"] == "passed"
+        assert len(review["iterations"]) == 2
+        assert history[0]["phase"] == "self_review_revision"

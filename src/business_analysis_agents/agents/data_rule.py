@@ -81,9 +81,34 @@ data_rdf_turtleだけを修正してください。
 
 PDF本文、Scenario RDF、現在のData RDF、RDFLibのparse error、語彙検証結果、
 pySHACL結果、修正履歴を使って修正してください。ontology_turtleやData SHACL shapesは変更しないでください。
+入力にself_review_resultがある場合は、各findingのevidenceとrevision_instructionも使ってください。
+Self-Review findingでもPDF本文またはScenario RDFに根拠が確認できない変更は行わないでください。
 SHACL違反を解消するためにPDF本文に根拠のない情報を追加しないでください。根拠不足の情報は削除するか、
 必要に応じて未解決事項として残してください。
 data_rdf_turtleは必須です。
+""".strip()
+
+DATA_SELF_REVIEW_INSTRUCTIONS = """
+Mode: data_self_review
+PDF本文、Scenario RDF、現在のData RDFを比較し、構文やSHACLではなく内容の意味的な
+整合性と網羅性を自己評価してください。
+
+確認事項:
+- 文書、帳票、データ、データ項目、使用・生成されるデータが欠落していないか。
+- データ種別やデータ間の関係を誤っていないか。
+- PDFにもScenario RDFにも根拠のないデータや関係を追加していないか。
+- 同一データを不必要に重複抽出していないか。
+- PDFとScenario RDFの内容と矛盾していないか。
+
+出力ルール:
+- self_review_resultを必須で出力し、Data RDFやSHACLは出力しないでください。
+- 問題がなければpassed=true、findings=[]としてください。
+- 問題があればpassed=falseとし、category、target、description、evidence、
+  revision_instructionをfindingごとに記録してください。
+- reviewer_agent=data、rdf_kind=dataとしてください。
+- evidenceにはsourceをPDFまたはScenario RDFとし、ページ番号やURI等をlocator、
+  根拠となる記述をexcerptに入れてください。
+- 根拠のない推測やOntology・SHACLの変更提案を含めないでください。
 """.strip()
 
 RULE_GENERATION_INSTRUCTIONS = """
@@ -129,8 +154,34 @@ rule_rdf_turtleだけを修正してください。
 PDF本文、Scenario RDF、前回のRule RDF、検証済みData RDF、固定済みontology_turtle、
 固定済みRule SHACL shapes、RDFLibのparse error、語彙検証結果、pySHACL結果、修正履歴を使って
 修正してください。ontology_turtleやRule SHACL shapesは変更しないでください。
+入力にself_review_resultがある場合は、各findingのevidenceとrevision_instructionも使ってください。
+Self-Review findingでもPDF本文またはScenario RDFに根拠が確認できない変更は行わないでください。
 SHACL違反を解消するためにPDF本文に根拠のない業務ルールを追加しないでください。
 rule_rdf_turtleは必須です。
+""".strip()
+
+RULE_SELF_REVIEW_INSTRUCTIONS = """
+Mode: rule_self_review
+PDF本文、Scenario RDF、現在のRule RDFを比較し、構文やSHACLではなく内容の意味的な
+整合性と網羅性を自己評価してください。入力された検証済みData RDFはデータ参照の確認だけに
+使用してください。
+
+確認事項:
+- 判断条件、適用条件、数値条件、期間条件、例外条件が欠落していないか。
+- 条件値、条件の意味、AND/OR等の関係を誤っていないか。
+- PDFにもScenario RDFにも存在しないルールを追加していないか。
+- Rule RDFからData RDFへの参照を誤っていないか。
+- 同一ルールを不必要に重複抽出していないか。
+
+出力ルール:
+- self_review_resultを必須で出力し、Rule RDFやSHACLは出力しないでください。
+- 問題がなければpassed=true、findings=[]としてください。
+- 問題があればpassed=falseとし、category、target、description、evidence、
+  revision_instructionをfindingごとに記録してください。
+- reviewer_agent=rule、rdf_kind=ruleとしてください。
+- evidenceにはsourceをPDFまたはScenario RDFとし、ページ番号やURI等をlocator、
+  根拠となる記述をexcerptに入れてください。
+- 根拠のない推測やOntology・SHACLの変更提案を含めないでください。
 """.strip()
 
 
@@ -168,10 +219,14 @@ def _mode_instructions(mode: DataRuleAgentMode) -> str:
         return DATA_SHACL_GENERATION_INSTRUCTIONS
     if mode is DataRuleAgentMode.DATA_REVISION:
         return DATA_REVISION_INSTRUCTIONS
+    if mode is DataRuleAgentMode.DATA_SELF_REVIEW:
+        return DATA_SELF_REVIEW_INSTRUCTIONS
     if mode is DataRuleAgentMode.RULE_GENERATION:
         return RULE_GENERATION_INSTRUCTIONS
     if mode is DataRuleAgentMode.RULE_SHACL_GENERATION:
         return RULE_SHACL_GENERATION_INSTRUCTIONS
+    if mode is DataRuleAgentMode.RULE_SELF_REVIEW:
+        return RULE_SELF_REVIEW_INSTRUCTIONS
     return RULE_REVISION_INSTRUCTIONS
 
 

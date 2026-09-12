@@ -141,6 +141,7 @@ class WorkflowAgentMode(str, Enum):
     WORKFLOW_GENERATION = "workflow_generation"
     WORKFLOW_SHACL_GENERATION = "workflow_shacl_generation"
     WORKFLOW_REVISION = "workflow_revision"
+    WORKFLOW_SELF_REVIEW = "workflow_self_review"
 
 
 class DataRuleAgentMode(str, Enum):
@@ -149,9 +150,11 @@ class DataRuleAgentMode(str, Enum):
     DATA_GENERATION = "data_generation"
     DATA_SHACL_GENERATION = "data_shacl_generation"
     DATA_REVISION = "data_revision"
+    DATA_SELF_REVIEW = "data_self_review"
     RULE_GENERATION = "rule_generation"
     RULE_SHACL_GENERATION = "rule_shacl_generation"
     RULE_REVISION = "rule_revision"
+    RULE_SELF_REVIEW = "rule_self_review"
 
 
 class ConsistencyAgentMode(str, Enum):
@@ -159,6 +162,25 @@ class ConsistencyAgentMode(str, Enum):
 
     CROSS_SHACL_GENERATION = "cross_shacl_generation"
     VIOLATION_ANALYSIS = "violation_analysis"
+
+
+class SelfReviewCategory(str, Enum):
+    """RDFと根拠文書の意味的不整合カテゴリ。"""
+
+    MISSING_INFORMATION = "missing_information"
+    UNSUPPORTED_INFORMATION = "unsupported_information"
+    MISINTERPRETATION = "misinterpretation"
+    INCORRECT_RELATION = "incorrect_relation"
+    DUPLICATE_EXTRACTION = "duplicate_extraction"
+    CONTRADICTION = "contradiction"
+
+
+class SelfReviewRunStatus(str, Enum):
+    """Self-Reviewループ全体の終了状態。"""
+
+    PASSED = "passed"
+    MAX_ITERATIONS = "max_iterations"
+    SHACL_FAILED = "shacl_failed"
 
 
 class SourceDocument(StrictBaseModel):
@@ -232,6 +254,55 @@ class ScenarioAgentOutput(StrictBaseModel):
     scenario_rdf_turtle: str = Field(min_length=1)
 
 
+class SelfReviewEvidence(StrictBaseModel):
+    """Self-Review findingの根拠箇所。"""
+
+    source: str = Field(min_length=1)
+    locator: str | None = None
+    excerpt: str = Field(min_length=1)
+
+
+class SelfReviewFinding(StrictBaseModel):
+    """Self-Reviewで検出した意味的な問題。"""
+
+    category: SelfReviewCategory
+    target: str | None = None
+    description: str = Field(min_length=1)
+    evidence: list[SelfReviewEvidence] = Field(min_length=1)
+    revision_instruction: str = Field(min_length=1)
+    severity: Severity = Severity.ERROR
+
+
+class SelfReviewResult(StrictBaseModel):
+    """抽出Agent自身によるRDFの意味的評価結果。"""
+
+    reviewer_agent: AgentName
+    rdf_kind: RdfKind
+    passed: bool
+    findings: list[SelfReviewFinding] = Field(default_factory=list)
+    summary: str = Field(min_length=1)
+
+
+class SelfReviewIteration(StrictBaseModel):
+    """1回のSelf-Reviewと後続revisionの記録。"""
+
+    iteration: int = Field(ge=0)
+    rdf_hash: str = Field(min_length=1)
+    result: SelfReviewResult
+    revision_performed: bool = False
+    post_revision_validation_conforms: bool | None = None
+
+
+class SelfReviewHistory(StrictBaseModel):
+    """対象RDFのSelf-Reviewループ全体の記録。"""
+
+    rdf_kind: RdfKind
+    status: SelfReviewRunStatus
+    max_revision_iterations: int = Field(ge=0)
+    iterations: list[SelfReviewIteration] = Field(default_factory=list)
+    final_result: SelfReviewResult | None = None
+
+
 class WorkflowExtractionInput(StrictBaseModel):
     """Workflow抽出エージェントに渡す入力。"""
 
@@ -280,6 +351,7 @@ class WorkflowAgentOutput(StrictBaseModel):
     revision_summary: str | None = None
     addressed_violations: Any = Field(default_factory=list)
     remaining_violations: Any = Field(default_factory=list)
+    self_review_result: SelfReviewResult | None = None
 
 
 class DataRuleAgentOutput(StrictBaseModel):
@@ -301,6 +373,7 @@ class DataRuleAgentOutput(StrictBaseModel):
     revision_summary: str | None = None
     addressed_violations: Any = Field(default_factory=list)
     remaining_violations: Any = Field(default_factory=list)
+    self_review_result: SelfReviewResult | None = None
 
 
 
@@ -460,24 +533,6 @@ class DataRuleExtractionOutput(StrictBaseModel):
         """既存コードとの互換用にRule一覧を返す。"""
 
         return self.rule.rules
-
-
-class SelfReviewFinding(StrictBaseModel):
-    """自己レビューで見つかった個別の指摘。"""
-
-    severity: Severity
-    message: str = Field(min_length=1)
-    target_id: str | None = None
-    suggestion: str | None = None
-
-
-class SelfReviewResult(StrictBaseModel):
-    """抽出エージェント自身による出力品質レビュー結果。"""
-
-    reviewer_agent: AgentName
-    status: ReviewStatus
-    findings: list[SelfReviewFinding] = Field(default_factory=list)
-    summary: str | None = None
 
 
 class ShaclViolation(StrictBaseModel):

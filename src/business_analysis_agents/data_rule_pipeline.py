@@ -15,10 +15,14 @@ from business_analysis_agents.fixed_resources import (
     load_fixed_turtle,
 )
 from business_analysis_agents.models import (
+    AgentName,
     DataRuleAgentMode,
     DataRuleAgentOutput,
     OntologyValidationResult,
     RdfKind,
+    SelfReviewHistory,
+    SelfReviewResult,
+    SelfReviewRunStatus,
     WorkflowRdfValidationResult,
 )
 from business_analysis_agents.rdf_validation import (
@@ -27,6 +31,7 @@ from business_analysis_agents.rdf_validation import (
     validate_rdf,
     validation_feedback,
 )
+from business_analysis_agents.self_review import run_self_review_loop
 from business_analysis_agents.workflow_pipeline import (
     load_scenario_rdf,
     write_json,
@@ -36,6 +41,8 @@ from business_analysis_agents.workflow_pipeline import (
 
 DEFAULT_MAX_DATA_ITERATIONS = 3
 DEFAULT_MAX_RULE_ITERATIONS = 3
+DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS = 3
+DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS = 3
 
 
 def _output_payload(output: DataRuleAgentOutput) -> dict[str, Any]:
@@ -58,6 +65,22 @@ def _require_text(value: str | None, field_name: str) -> str:
     if not value:
         raise ValueError(f"Data/Rule Agent output did not include {field_name}.")
     return value
+
+
+def _require_self_review(output: DataRuleAgentOutput) -> SelfReviewResult:
+    result = output.self_review_result
+    if result is None:
+        raise ValueError("Data/Rule Self-Review output did not include self_review_result.")
+    if any(
+        (
+            output.data_rdf_turtle,
+            output.rule_rdf_turtle,
+            output.data_shacl_turtle,
+            output.rule_shacl_turtle,
+        )
+    ):
+        raise ValueError("Data/Rule Self-Review must not generate RDF or SHACL Turtle.")
+    return result
 
 
 def _assert_fixed_resources(
@@ -85,6 +108,7 @@ def _generate_and_revise_data(
     data_ontology_hash: str,
     output_dir: Path,
     max_iterations: int,
+    max_self_review_iterations: int,
 ) -> tuple[
     str,
     str,
@@ -94,6 +118,7 @@ def _generate_and_revise_data(
     str,
     OntologyValidationResult,
     str,
+    SelfReviewHistory,
 ]:
     data_history: list[dict[str, Any]] = []
     output = run_data_rule_agent(
@@ -179,10 +204,95 @@ def _generate_and_revise_data(
         data_history.append(
             {
                 "iteration": iteration,
+                "phase": "shacl_revision",
                 "output": _output_payload(output),
                 "validation": _validation_payload(validation),
             }
         )
+
+    def assert_fixed_resources() -> None:
+        _assert_fixed_resources(
+            data_ontology,
+            data_shapes,
+            data_ontology_hash,
+            data_shapes_hash,
+            "Data",
+        )
+
+    def review_rdf(current_rdf: str, review_iteration: int) -> SelfReviewResult:
+        review_output = run_data_rule_agent(
+            DataRuleAgentMode.DATA_SELF_REVIEW,
+            {
+                "scenario_rdf_turtle": scenario_turtle,
+                "source_document": source_document,
+                "ontology_turtle": data_ontology,
+                "data_shacl_turtle": data_shapes,
+                "current_data_rdf": current_rdf,
+                "self_review_iteration": review_iteration,
+                "ontology_hash": data_ontology_hash,
+                "data_shapes_hash": data_shapes_hash,
+            },
+            model=model,
+            runner=runner,
+        )
+        return _require_self_review(review_output)
+
+    def revise_from_self_review(
+        current_rdf: str,
+        self_review_result: SelfReviewResult,
+        current_validation: WorkflowRdfValidationResult,
+        iteration: int,
+    ) -> tuple[str, dict[str, Any], DataRuleAgentOutput]:
+        revision_output = run_data_rule_agent(
+            DataRuleAgentMode.DATA_REVISION,
+            {
+                "scenario_rdf_turtle": scenario_turtle,
+                "source_document": source_document,
+                "ontology_turtle": data_ontology,
+                "data_shacl_turtle": data_shapes,
+                "previous_data_rdf": current_rdf,
+                "self_review_result": self_review_result.model_dump(mode="json"),
+                "validation_feedback": validation_feedback(current_validation),
+                "previous_validation": _validation_payload(current_validation),
+                "revision_history": data_history,
+                "ontology_hash": data_ontology_hash,
+                "data_shapes_hash": data_shapes_hash,
+            },
+            model=model,
+            runner=runner,
+        )
+        revised_rdf = _require_text(revision_output.data_rdf_turtle, "data_rdf_turtle")
+        return revised_rdf, _output_payload(revision_output), revision_output
+
+    def validate_revised_rdf(
+        revised_rdf: str,
+        iteration: int,
+    ) -> WorkflowRdfValidationResult:
+        return validate_rdf(
+            revised_rdf,
+            data_ontology,
+            data_shapes,
+            rdf_kind=RdfKind.DATA,
+            iteration=iteration,
+        )
+
+    data_turtle, validation, self_review_history, revision_output = (
+        run_self_review_loop(
+            rdf_turtle=data_turtle,
+            validation=validation,
+            rdf_kind=RdfKind.DATA,
+            reviewer_agent=AgentName.DATA,
+            max_revision_iterations=max_self_review_iterations,
+            revision_history=data_history,
+            review_rdf=review_rdf,
+            revise_rdf=revise_from_self_review,
+            validate_rdf=validate_revised_rdf,
+            serialize_validation=_validation_payload,
+            assert_fixed_resources=assert_fixed_resources,
+        )
+    )
+    if revision_output is not None:
+        final_output = revision_output
     return (
         initial_data_turtle,
         data_turtle,
@@ -192,6 +302,7 @@ def _generate_and_revise_data(
         data_shapes,
         ontology_validation,
         data_shapes_hash,
+        self_review_history,
     )
 
 
@@ -205,6 +316,7 @@ def _generate_and_revise_rule(
     rule_ontology_hash: str,
     output_dir: Path,
     max_iterations: int,
+    max_self_review_iterations: int,
 ) -> tuple[
     str,
     str,
@@ -214,6 +326,7 @@ def _generate_and_revise_rule(
     str,
     OntologyValidationResult,
     str,
+    SelfReviewHistory,
 ]:
     rule_history: list[dict[str, Any]] = []
     output = run_data_rule_agent(
@@ -303,10 +416,98 @@ def _generate_and_revise_rule(
         rule_history.append(
             {
                 "iteration": iteration,
+                "phase": "shacl_revision",
                 "output": _output_payload(output),
                 "validation": _validation_payload(validation),
             }
         )
+
+    def assert_fixed_resources() -> None:
+        _assert_fixed_resources(
+            rule_ontology,
+            rule_shapes,
+            rule_ontology_hash,
+            rule_shapes_hash,
+            "Rule",
+        )
+
+    def review_rdf(current_rdf: str, review_iteration: int) -> SelfReviewResult:
+        review_output = run_data_rule_agent(
+            DataRuleAgentMode.RULE_SELF_REVIEW,
+            {
+                "scenario_rdf_turtle": scenario_turtle,
+                "source_document": source_document,
+                "validated_data_rdf": data_turtle,
+                "ontology_turtle": rule_ontology,
+                "rule_shacl_turtle": rule_shapes,
+                "current_rule_rdf": current_rdf,
+                "self_review_iteration": review_iteration,
+                "ontology_hash": rule_ontology_hash,
+                "rule_shapes_hash": rule_shapes_hash,
+            },
+            model=model,
+            runner=runner,
+        )
+        return _require_self_review(review_output)
+
+    def revise_from_self_review(
+        current_rdf: str,
+        self_review_result: SelfReviewResult,
+        current_validation: WorkflowRdfValidationResult,
+        iteration: int,
+    ) -> tuple[str, dict[str, Any], DataRuleAgentOutput]:
+        revision_output = run_data_rule_agent(
+            DataRuleAgentMode.RULE_REVISION,
+            {
+                "scenario_rdf_turtle": scenario_turtle,
+                "source_document": source_document,
+                "validated_data_rdf": data_turtle,
+                "ontology_turtle": rule_ontology,
+                "rule_shacl_turtle": rule_shapes,
+                "previous_rule_rdf": current_rdf,
+                "self_review_result": self_review_result.model_dump(mode="json"),
+                "validation_feedback": validation_feedback(current_validation),
+                "previous_validation": _validation_payload(current_validation),
+                "revision_history": rule_history,
+                "ontology_hash": rule_ontology_hash,
+                "rule_shapes_hash": rule_shapes_hash,
+            },
+            model=model,
+            runner=runner,
+        )
+        revised_rdf = _require_text(revision_output.rule_rdf_turtle, "rule_rdf_turtle")
+        return revised_rdf, _output_payload(revision_output), revision_output
+
+    def validate_revised_rdf(
+        revised_rdf: str,
+        iteration: int,
+    ) -> WorkflowRdfValidationResult:
+        return validate_rdf(
+            revised_rdf,
+            rule_ontology,
+            rule_shapes,
+            rdf_kind=RdfKind.RULE,
+            additional_data_turtle=data_turtle,
+            iteration=iteration,
+        )
+
+    rule_turtle, validation, self_review_history, revision_output = (
+        run_self_review_loop(
+            rdf_turtle=rule_turtle,
+            validation=validation,
+            rdf_kind=RdfKind.RULE,
+            reviewer_agent=AgentName.RULE,
+            max_revision_iterations=max_self_review_iterations,
+            revision_history=rule_history,
+            review_rdf=review_rdf,
+            revise_rdf=revise_from_self_review,
+            validate_rdf=validate_revised_rdf,
+            serialize_validation=_validation_payload,
+            assert_fixed_resources=assert_fixed_resources,
+        )
+    )
+    if revision_output is not None:
+        final_output = revision_output
     return (
         initial_rule_turtle,
         rule_turtle,
@@ -316,6 +517,7 @@ def _generate_and_revise_rule(
         rule_shapes,
         ontology_validation,
         rule_shapes_hash,
+        self_review_history,
     )
 
 
@@ -326,6 +528,8 @@ def run_data_rule_pipeline(
     output_dir: Path | str = "outputs/data_rule",
     max_data_iterations: int = DEFAULT_MAX_DATA_ITERATIONS,
     max_rule_iterations: int = DEFAULT_MAX_RULE_ITERATIONS,
+    max_data_self_review_iterations: int = DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS,
+    max_rule_self_review_iterations: int = DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS,
     runner: Callable[..., Any] | None = None,
     data_ontology_file: Path | str = DEFAULT_DATA_ONTOLOGY,
     rule_ontology_file: Path | str = DEFAULT_RULE_ONTOLOGY,
@@ -363,6 +567,7 @@ def run_data_rule_pipeline(
         data_shapes,
         data_ontology_validation,
         data_shapes_hash,
+        data_self_review,
     ) = _generate_and_revise_data(
         scenario_turtle,
         source_document_payload,
@@ -372,10 +577,15 @@ def run_data_rule_pipeline(
         data_ontology_hash=data_ontology_hash,
         output_dir=data_rule_dir,
         max_iterations=max_data_iterations,
+        max_self_review_iterations=max_data_self_review_iterations,
     )
     write_text(data_rule_dir / "data_final.ttl", data_turtle)
     write_json(data_rule_dir / "data_validation.json", _validation_payload(data_validation))
     write_json(data_rule_dir / "data_revision_history.json", data_history)
+    write_json(
+        data_rule_dir / "data_self_review.json",
+        data_self_review.model_dump(mode="json"),
+    )
 
     (
         initial_rule_turtle,
@@ -386,6 +596,7 @@ def run_data_rule_pipeline(
         rule_shapes,
         rule_ontology_validation,
         rule_shapes_hash,
+        rule_self_review,
     ) = _generate_and_revise_rule(
         scenario_turtle,
         source_document_payload,
@@ -396,10 +607,15 @@ def run_data_rule_pipeline(
         rule_ontology_hash=rule_ontology_hash,
         output_dir=data_rule_dir,
         max_iterations=max_rule_iterations,
+        max_self_review_iterations=max_rule_self_review_iterations,
     )
     write_text(data_rule_dir / "rule_final.ttl", rule_turtle)
     write_json(data_rule_dir / "rule_validation.json", _validation_payload(rule_validation))
     write_json(data_rule_dir / "rule_revision_history.json", rule_history)
+    write_json(
+        data_rule_dir / "rule_self_review.json",
+        rule_self_review.model_dump(mode="json"),
+    )
 
     final_status = (
         "completed"
@@ -407,6 +623,8 @@ def run_data_rule_pipeline(
         and rule_validation.conforms
         and data_ontology_validation.conforms
         and rule_ontology_validation.conforms
+        and data_self_review.status is SelfReviewRunStatus.PASSED
+        and rule_self_review.status is SelfReviewRunStatus.PASSED
         else "needs_review"
     )
     metadata = {
@@ -427,6 +645,10 @@ def run_data_rule_pipeline(
         "rule_shapes_hash": rule_shapes_hash,
         "max_data_iterations": max_data_iterations,
         "max_rule_iterations": max_rule_iterations,
+        "max_data_self_review_iterations": max_data_self_review_iterations,
+        "max_rule_self_review_iterations": max_rule_self_review_iterations,
+        "data_self_review_status": data_self_review.status.value,
+        "rule_self_review_status": rule_self_review.status.value,
         "final_status": final_status,
     }
     return {
@@ -434,5 +656,7 @@ def run_data_rule_pipeline(
         "final_status": final_status,
         "data_validation": _validation_payload(data_validation),
         "rule_validation": _validation_payload(rule_validation),
+        "data_self_review": data_self_review.model_dump(mode="json"),
+        "rule_self_review": rule_self_review.model_dump(mode="json"),
         "metadata": metadata,
     }

@@ -35,7 +35,9 @@ from business_analysis_agents.consistency_pipeline import (
 )
 from business_analysis_agents.data_rule_pipeline import (
     DEFAULT_MAX_DATA_ITERATIONS,
+    DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS,
     DEFAULT_MAX_RULE_ITERATIONS,
+    DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS,
     run_data_rule_pipeline,
 )
 from business_analysis_agents.fixed_resources import (
@@ -65,6 +67,7 @@ from business_analysis_agents.review.cli import (
 )
 from business_analysis_agents.workflow_pipeline import (
     DEFAULT_MAX_WORKFLOW_ITERATIONS,
+    DEFAULT_MAX_WORKFLOW_SELF_REVIEW_ITERATIONS,
     run_workflow_pipeline,
     write_json,
 )
@@ -149,6 +152,11 @@ def run_end_to_end_controller(
     max_workflow_iterations: int = DEFAULT_MAX_WORKFLOW_ITERATIONS,
     max_data_iterations: int = DEFAULT_MAX_DATA_ITERATIONS,
     max_rule_iterations: int = DEFAULT_MAX_RULE_ITERATIONS,
+    max_workflow_self_review_iterations: int = (
+        DEFAULT_MAX_WORKFLOW_SELF_REVIEW_ITERATIONS
+    ),
+    max_data_self_review_iterations: int = DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS,
+    max_rule_self_review_iterations: int = DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS,
     reviewer: str | None = None,
 ) -> ControllerRunSummary:
     """Run Scenario through Human Review in sequence."""
@@ -208,6 +216,7 @@ def run_end_to_end_controller(
             pdf_file=pdf_file,
             output_dir=workflow_dir,
             max_workflow_iterations=max_workflow_iterations,
+            max_self_review_iterations=max_workflow_self_review_iterations,
             ontology_file=workflow_ontology_file,
         )
     except Exception as error:
@@ -226,6 +235,7 @@ def run_end_to_end_controller(
         "workflow_revision_history": str(
             workflow_dir / "workflow_revision_history.json"
         ),
+        "workflow_self_review": str(workflow_dir / "workflow_self_review.json"),
     }
     summary.output_files.update(workflow_stage.output_files)
     if workflow_result["final_status"] != "completed":
@@ -249,6 +259,8 @@ def run_end_to_end_controller(
             output_dir=data_rule_dir,
             max_data_iterations=max_data_iterations,
             max_rule_iterations=max_rule_iterations,
+            max_data_self_review_iterations=max_data_self_review_iterations,
+            max_rule_self_review_iterations=max_rule_self_review_iterations,
             data_ontology_file=data_ontology_file,
             rule_ontology_file=rule_ontology_file,
         )
@@ -266,10 +278,12 @@ def run_end_to_end_controller(
         "data_shapes": str(data_rule_dir / "data_shapes_generated.ttl"),
         "data_validation": str(data_rule_dir / "data_validation.json"),
         "data_revision_history": str(data_rule_dir / "data_revision_history.json"),
+        "data_self_review": str(data_rule_dir / "data_self_review.json"),
         "rule_rdf": str(data_rule_dir / "rule_final.ttl"),
         "rule_shapes": str(data_rule_dir / "rule_shapes_generated.ttl"),
         "rule_validation": str(data_rule_dir / "rule_validation.json"),
         "rule_revision_history": str(data_rule_dir / "rule_revision_history.json"),
+        "rule_self_review": str(data_rule_dir / "rule_self_review.json"),
     }
     summary.output_files.update(data_rule_stage.output_files)
     if data_rule_result["final_status"] != "completed":
@@ -418,6 +432,12 @@ def build_workflow_parser() -> argparse.ArgumentParser:
         help="Maximum Workflow RDF revision retries.",
     )
     workflow_parser.add_argument(
+        "--max-self-review-iterations",
+        type=int,
+        default=DEFAULT_MAX_WORKFLOW_SELF_REVIEW_ITERATIONS,
+        help="Maximum Workflow Self-Review revision retries.",
+    )
+    workflow_parser.add_argument(
         "--save-debug-outputs",
         action="store_true",
         help="Save ontology, SHACL, agent output, and run metadata artifacts.",
@@ -468,6 +488,18 @@ def build_data_rule_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="Maximum Rule RDF revision retries.",
+    )
+    parser.add_argument(
+        "--max-data-self-review-iterations",
+        type=int,
+        default=DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS,
+        help="Maximum Data Self-Review revision retries.",
+    )
+    parser.add_argument(
+        "--max-rule-self-review-iterations",
+        type=int,
+        default=DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS,
+        help="Maximum Rule Self-Review revision retries.",
     )
     return parser
 
@@ -543,6 +575,13 @@ def build_run_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-workflow-iterations", type=int, default=None)
     parser.add_argument("--max-data-iterations", type=int, default=None)
     parser.add_argument("--max-rule-iterations", type=int, default=None)
+    parser.add_argument(
+        "--max-workflow-self-review-iterations",
+        type=int,
+        default=None,
+    )
+    parser.add_argument("--max-data-self-review-iterations", type=int, default=None)
+    parser.add_argument("--max-rule-self-review-iterations", type=int, default=None)
     parser.add_argument("--reviewer", default=None)
     return parser
 
@@ -604,6 +643,21 @@ def run(argv: Sequence[str] | None = None) -> int:
                     if args.max_rule_iterations is not None
                     else config.max_repair_iterations
                 ),
+                max_workflow_self_review_iterations=(
+                    args.max_workflow_self_review_iterations
+                    if args.max_workflow_self_review_iterations is not None
+                    else config.max_repair_iterations
+                ),
+                max_data_self_review_iterations=(
+                    args.max_data_self_review_iterations
+                    if args.max_data_self_review_iterations is not None
+                    else config.max_repair_iterations
+                ),
+                max_rule_self_review_iterations=(
+                    args.max_rule_self_review_iterations
+                    if args.max_rule_self_review_iterations is not None
+                    else config.max_repair_iterations
+                ),
                 reviewer=args.reviewer,
             )
         except (FileNotFoundError, PermissionError, ValueError) as error:
@@ -636,6 +690,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 pdf_file=args.pdf,
                 output_dir=args.output_dir,
                 max_workflow_iterations=args.max_workflow_iterations,
+                max_self_review_iterations=args.max_self_review_iterations,
                 ontology_file=args.ontology,
                 save_debug_outputs=args.save_debug_outputs,
             )
@@ -660,6 +715,12 @@ def run(argv: Sequence[str] | None = None) -> int:
                 output_dir=args.output_dir,
                 max_data_iterations=args.max_data_iterations,
                 max_rule_iterations=args.max_rule_iterations,
+                max_data_self_review_iterations=(
+                    args.max_data_self_review_iterations
+                ),
+                max_rule_self_review_iterations=(
+                    args.max_rule_self_review_iterations
+                ),
                 data_ontology_file=args.data_ontology,
                 rule_ontology_file=args.rule_ontology,
             )
