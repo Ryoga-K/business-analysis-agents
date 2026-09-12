@@ -20,7 +20,7 @@ from business_analysis_agents.models import (
     ConsistencyViolationAnalysis,
     RdfKind,
 )
-from business_analysis_agents.rdf_validation import validate_cross_rdf
+from business_analysis_agents.rdf_validation import content_hash, validate_cross_rdf
 
 
 WORKFLOW_ONTOLOGY = """
@@ -224,6 +224,46 @@ def test_consistency_pipeline_saves_shapes_and_conforming_result(
     )
     assert evaluation["conforms"]
     assert evaluation["violation_analyses"] == []
+
+
+def test_consistency_pipeline_reuses_existing_cross_shacl(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A repeated Cross Review validates with the original generated shapes."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    paths = _write_inputs(tmp_path)
+    output_dir = tmp_path / "consistency"
+    shapes_file = output_dir / "consistency_shapes_generated.ttl"
+    shapes_file.parent.mkdir()
+    shapes_file.write_text(CROSS_SHAPES, encoding="utf-8")
+    expected_hash = content_hash(CROSS_SHAPES)
+
+    def unexpected_runner(_agent, _prompt):
+        pytest.fail("No agent call is needed when reused Cross-SHACL conforms")
+
+    result = run_consistency_pipeline(
+        model="gpt-test",
+        workflow_file=paths["workflow.ttl"],
+        data_file=paths["data.ttl"],
+        rule_file=paths["rule.ttl"],
+        workflow_validation_file=paths["workflow_validation.json"],
+        data_validation_file=paths["data_validation.json"],
+        rule_validation_file=paths["rule_validation.json"],
+        workflow_ontology_file=paths["workflow_ontology.ttl"],
+        data_ontology_file=paths["data_ontology.ttl"],
+        rule_ontology_file=paths["rule_ontology.ttl"],
+        output_dir=output_dir,
+        runner=unexpected_runner,
+        cross_shacl_file=shapes_file,
+        expected_cross_shapes_hash=expected_hash,
+    )
+
+    assert result["final_status"] == "completed"
+    assert result["cross_shacl_source"] == "reused"
+    assert result["cross_shapes_hash"] == expected_hash
+    assert shapes_file.read_text(encoding="utf-8") == CROSS_SHAPES
 
 
 def test_consistency_pipeline_rejects_rdf_without_successful_individual_validation(

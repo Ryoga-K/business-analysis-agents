@@ -57,16 +57,16 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
 
     def fake_consistency(**kwargs):
         calls.append("consistency")
-        assert kwargs["workflow_file"] == tmp_path / "workflow" / "workflow_final.ttl"
-        assert kwargs["data_file"] == tmp_path / "data_rule" / "data_final.ttl"
-        assert kwargs["rule_file"] == tmp_path / "data_rule" / "rule_final.ttl"
-        assert kwargs["workflow_validation_file"] == (
-            tmp_path / "workflow" / "workflow_validation.json"
+        assert kwargs["workflow_dir"] == tmp_path / "workflow"
+        assert kwargs["data_rule_dir"] == tmp_path / "data_rule"
+        assert kwargs["consistency_dir"] == tmp_path / "consistency"
+        return (
+            {
+                "output_dir": str(kwargs["consistency_dir"]),
+                "final_status": "needs_revision",
+            },
+            {"status": "max_iterations"},
         )
-        return {
-            "output_dir": str(kwargs["output_dir"]),
-            "final_status": "needs_revision",
-        }
 
     def fake_human_review(**kwargs):
         calls.append("human_review")
@@ -90,7 +90,7 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
     monkeypatch.setattr(controller, "run_scenario_pipeline", fake_scenario)
     monkeypatch.setattr(controller, "run_workflow_pipeline", fake_workflow)
     monkeypatch.setattr(controller, "run_data_rule_pipeline", fake_data_rule)
-    monkeypatch.setattr(controller, "run_consistency_pipeline", fake_consistency)
+    monkeypatch.setattr(controller, "run_consistency_revision_loop", fake_consistency)
     monkeypatch.setattr(controller, "run_human_review", fake_human_review)
 
     summary = controller.run_end_to_end_controller(
@@ -151,7 +151,7 @@ def test_end_to_end_controller_stops_after_stage_exception(monkeypatch, tmp_path
 
     monkeypatch.setattr(controller, "run_workflow_pipeline", fail_workflow)
     monkeypatch.setattr(controller, "run_data_rule_pipeline", must_not_run)
-    monkeypatch.setattr(controller, "run_consistency_pipeline", must_not_run)
+    monkeypatch.setattr(controller, "run_consistency_revision_loop", must_not_run)
     monkeypatch.setattr(controller, "run_human_review", must_not_run)
 
     summary = controller.run_end_to_end_controller(
@@ -208,7 +208,7 @@ def test_end_to_end_controller_stops_when_individual_validation_needs_review(
         raise AssertionError("An unvalidated RDF was passed to a later pipeline")
 
     monkeypatch.setattr(controller, "run_data_rule_pipeline", must_not_run)
-    monkeypatch.setattr(controller, "run_consistency_pipeline", must_not_run)
+    monkeypatch.setattr(controller, "run_consistency_revision_loop", must_not_run)
     monkeypatch.setattr(controller, "run_human_review", must_not_run)
 
     summary = controller.run_end_to_end_controller(
@@ -255,8 +255,11 @@ def test_end_to_end_controller_records_human_review_failure(
     )
     monkeypatch.setattr(
         controller,
-        "run_consistency_pipeline",
-        lambda **kwargs: {"final_status": "needs_revision"},
+        "run_consistency_revision_loop",
+        lambda **kwargs: (
+            {"final_status": "needs_revision"},
+            {"status": "max_iterations"},
+        ),
     )
 
     def fail_human_review(**kwargs):
@@ -304,13 +307,166 @@ def test_run_subcommand_returns_success_for_completed_cross_review(
         ],
         output_files={"run_summary": str(tmp_path / "run_summary.json")},
     )
-    monkeypatch.setattr(
-        controller,
-        "run_end_to_end_controller",
-        lambda **kwargs: summary,
-    )
+    received = {}
 
-    assert controller.run(["run", "--pdf", "manual.pdf"]) == 0
+    def fake_controller(**kwargs):
+        received.update(kwargs)
+        return summary
+
+    monkeypatch.setattr(controller, "run_end_to_end_controller", fake_controller)
+
+    assert (
+        controller.run(
+            [
+                "run",
+                "--pdf",
+                "manual.pdf",
+                "--max-cross-revision-iterations",
+                "5",
+            ]
+        )
+        == 0
+    )
+    assert received["max_cross_revision_iterations"] == 5
     output = capsys.readouterr().out
     assert "Consistency評価: needs_revision" in output
     assert "Human Review: needs_revision" in output
+
+
+def test_consistency_revision_loop_groups_targets_and_reuses_cross_shacl(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Two findings for one RDF produce one revision and a fixed-SHACL recheck."""
+
+    workflow_dir = tmp_path / "workflow"
+    data_rule_dir = tmp_path / "data_rule"
+    consistency_dir = tmp_path / "consistency"
+    workflow_dir.mkdir()
+    data_rule_dir.mkdir()
+    consistency_dir.mkdir()
+    (workflow_dir / "workflow_final.ttl").write_text(
+        "<urn:workflow> <urn:p> <urn:o> .",
+        encoding="utf-8",
+    )
+    (data_rule_dir / "data_final.ttl").write_text(
+        "<urn:data> <urn:p> <urn:o> .",
+        encoding="utf-8",
+    )
+    (data_rule_dir / "rule_final.ttl").write_text(
+        "<urn:rule> <urn:p> <urn:o> .",
+        encoding="utf-8",
+    )
+    cross_calls = 0
+    revision_calls = 0
+
+    violations = [
+        {
+            "focus_node": f"urn:data:{index}",
+            "message": "Missing cross reference",
+            "severity": "error",
+            "rdf_kind": "consistency",
+        }
+        for index in range(2)
+    ]
+    analyses = [
+        {
+            "violation_index": index,
+            "target_resource": f"urn:data:{index}",
+            "cause": f"Cause {index}",
+            "target_agent": "data",
+            "repair_instruction": f"Repair instruction {index}",
+        }
+        for index in range(2)
+    ]
+
+    def fake_consistency(**kwargs):
+        nonlocal cross_calls
+        cross_calls += 1
+        if cross_calls == 1:
+            assert "cross_shacl_file" not in kwargs
+            return {
+                "final_status": "needs_revision",
+                "cross_shapes_hash": "fixed-cross-hash",
+                "evaluation": {
+                    "conforms": False,
+                    "can_auto_repair": True,
+                    "violations": violations,
+                    "violation_analyses": analyses,
+                },
+            }
+        assert kwargs["cross_shacl_file"] == (
+            consistency_dir / "consistency_shapes_generated.ttl"
+        )
+        assert kwargs["expected_cross_shapes_hash"] == "fixed-cross-hash"
+        return {
+            "final_status": "completed",
+            "cross_shapes_hash": "fixed-cross-hash",
+            "evaluation": {
+                "conforms": True,
+                "can_auto_repair": False,
+                "violations": [],
+                "violation_analyses": [],
+            },
+        }
+
+    def fake_revision(**kwargs):
+        nonlocal revision_calls
+        revision_calls += 1
+        assert kwargs["target_agent"].value == "data"
+        bundle = kwargs["repair_bundle"]
+        assert bundle["violation_indices"] == [0, 1]
+        assert len(bundle["items"]) == 2
+        assert bundle["repair_instructions"] == [
+            "Repair instruction 0",
+            "Repair instruction 1",
+        ]
+        (data_rule_dir / "data_final.ttl").write_text(
+            "<urn:data-revised> <urn:p> <urn:o> .",
+            encoding="utf-8",
+        )
+        return {
+            "target_agent": "data",
+            "final_status": "completed",
+            "rdf_hash": "revised-data-hash",
+            "validation": {"conforms": True},
+            "self_review": {"status": "passed"},
+        }
+
+    monkeypatch.setattr(controller, "run_consistency_pipeline", fake_consistency)
+    monkeypatch.setattr(controller, "run_targeted_rdf_revision", fake_revision)
+
+    final_result, history = controller.run_consistency_revision_loop(
+        model="test-model",
+        pdf_file=tmp_path / "manual.pdf",
+        scenario_file=tmp_path / "scenario.ttl",
+        workflow_dir=workflow_dir,
+        data_rule_dir=data_rule_dir,
+        consistency_dir=consistency_dir,
+        workflow_ontology_file=tmp_path / "workflow-ontology.ttl",
+        data_ontology_file=tmp_path / "data-ontology.ttl",
+        rule_ontology_file=tmp_path / "rule-ontology.ttl",
+        max_cross_revision_iterations=2,
+        max_workflow_iterations=3,
+        max_data_iterations=3,
+        max_rule_iterations=3,
+        max_workflow_self_review_iterations=3,
+        max_data_self_review_iterations=3,
+        max_rule_self_review_iterations=3,
+    )
+
+    assert final_result["final_status"] == "completed"
+    assert history["status"] == "completed"
+    assert history["revision_rounds"] == 1
+    assert cross_calls == 2
+    assert revision_calls == 1
+    saved = json.loads(
+        (consistency_dir / "consistency_revision_history.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert saved["cross_shapes_hash"] == "fixed-cross-hash"
+    assert len(saved["iterations"]) == 2
+    assert saved["iterations"][0]["revision_results"][0][
+        "target_agent"
+    ] == "data"

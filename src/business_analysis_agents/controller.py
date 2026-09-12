@@ -6,6 +6,7 @@ import argparse
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -49,6 +50,7 @@ from business_analysis_agents.fixed_resources import (
 )
 from business_analysis_agents.document_loader import load_pdf_document
 from business_analysis_agents.models import (
+    AgentName,
     ControllerRunSummary,
     ControllerStage,
     ControllerStageResult,
@@ -56,6 +58,7 @@ from business_analysis_agents.models import (
     RunStatus,
     ScenarioAgentInput,
 )
+from business_analysis_agents.rdf_validation import content_hash
 from business_analysis_agents.review.cli import (
     DEFAULT_CONSISTENCY_EVALUATION as DEFAULT_REVIEW_CONSISTENCY_EVALUATION,
     DEFAULT_DATA_RDF as DEFAULT_REVIEW_DATA_RDF,
@@ -71,6 +74,12 @@ from business_analysis_agents.workflow_pipeline import (
     run_workflow_pipeline,
     write_json,
 )
+from business_analysis_agents.targeted_revision_pipeline import (
+    run_targeted_rdf_revision,
+)
+
+
+DEFAULT_MAX_CROSS_REVISION_ITERATIONS = 3
 
 
 def run_scenario_pipeline(
@@ -141,6 +150,239 @@ def _finish_failed_run(
     return summary
 
 
+def _group_consistency_repairs(
+    evaluation: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Group violation analyses by target RDF for one revision call per target."""
+
+    analyses = evaluation.get("violation_analyses")
+    violations = evaluation.get("violations")
+    if not isinstance(analyses, list) or not isinstance(violations, list):
+        raise ValueError("Consistency evaluation has invalid findings data.")
+    grouped: dict[AgentName, dict[str, Any]] = {}
+    allowed = (AgentName.WORKFLOW, AgentName.DATA, AgentName.RULE)
+    for analysis in analyses:
+        if not isinstance(analysis, dict):
+            raise ValueError("Consistency violation analysis must be an object.")
+        try:
+            target = AgentName(str(analysis["target_agent"]))
+            violation_index = int(analysis["violation_index"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("Consistency violation analysis is incomplete.") from error
+        if target not in allowed:
+            raise ValueError(f"Unsupported consistency repair target: {target.value}")
+        if violation_index < 0 or violation_index >= len(violations):
+            raise ValueError(
+                f"Consistency violation index is out of range: {violation_index}"
+            )
+        bundle = grouped.setdefault(
+            target,
+            {
+                "target_agent": target.value,
+                "violation_indices": [],
+                "repair_instructions": [],
+                "items": [],
+            },
+        )
+        instruction = str(analysis.get("repair_instruction", "")).strip()
+        if not instruction:
+            raise ValueError("Consistency repair instruction is empty.")
+        bundle["violation_indices"].append(violation_index)
+        instructions = bundle["repair_instructions"]
+        if instruction not in instructions:
+            instructions.append(instruction)
+        bundle["items"].append(
+            {
+                "violation": violations[violation_index],
+                "analysis": analysis,
+            }
+        )
+    return [grouped[target] for target in allowed if target in grouped]
+
+
+def _rdf_hashes(
+    workflow_file: Path,
+    data_file: Path,
+    rule_file: Path,
+) -> dict[str, str]:
+    return {
+        "workflow": content_hash(workflow_file.read_text(encoding="utf-8")),
+        "data": content_hash(data_file.read_text(encoding="utf-8")),
+        "rule": content_hash(rule_file.read_text(encoding="utf-8")),
+    }
+
+
+def run_consistency_revision_loop(
+    *,
+    model: str,
+    pdf_file: Path | str,
+    scenario_file: Path | str,
+    workflow_dir: Path,
+    data_rule_dir: Path,
+    consistency_dir: Path,
+    workflow_ontology_file: Path | str,
+    data_ontology_file: Path | str,
+    rule_ontology_file: Path | str,
+    max_cross_revision_iterations: int,
+    max_workflow_iterations: int,
+    max_data_iterations: int,
+    max_rule_iterations: int,
+    max_workflow_self_review_iterations: int,
+    max_data_self_review_iterations: int,
+    max_rule_self_review_iterations: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run Cross Consistency and bounded targeted revision rounds."""
+
+    if max_cross_revision_iterations < 0:
+        raise ValueError("max_cross_revision_iterations must be zero or greater.")
+    workflow_file = workflow_dir / "workflow_final.ttl"
+    data_file = data_rule_dir / "data_final.ttl"
+    rule_file = data_rule_dir / "rule_final.ttl"
+    cross_shapes_file = consistency_dir / "consistency_shapes_generated.ttl"
+    history_file = consistency_dir / "consistency_revision_history.json"
+
+    consistency_result = run_consistency_pipeline(
+        model=model,
+        workflow_file=workflow_file,
+        data_file=data_file,
+        rule_file=rule_file,
+        workflow_validation_file=workflow_dir / "workflow_validation.json",
+        data_validation_file=data_rule_dir / "data_validation.json",
+        rule_validation_file=data_rule_dir / "rule_validation.json",
+        output_dir=consistency_dir,
+        workflow_ontology_file=workflow_ontology_file,
+        data_ontology_file=data_ontology_file,
+        rule_ontology_file=rule_ontology_file,
+    )
+    cross_shapes_hash = str(consistency_result.get("cross_shapes_hash", ""))
+    if not cross_shapes_hash:
+        raise ValueError("Consistency result did not include cross_shapes_hash.")
+    iteration_history: list[dict[str, Any]] = []
+    history: dict[str, Any] = {
+        "status": "running",
+        "max_cross_revision_iterations": max_cross_revision_iterations,
+        "cross_shapes_hash": cross_shapes_hash,
+        "iterations": iteration_history,
+    }
+    revision_round = 0
+    consistency_iteration = 0
+
+    while True:
+        evaluation = consistency_result.get("evaluation")
+        if not isinstance(evaluation, dict):
+            raise ValueError("Consistency result did not include evaluation.")
+        conforms = evaluation.get("conforms") is True
+        bundles = _group_consistency_repairs(evaluation)
+        record: dict[str, Any] = {
+            "iteration": consistency_iteration,
+            "cross_conforms": conforms,
+            "cross_status": consistency_result.get("final_status"),
+            "cross_shapes_hash": cross_shapes_hash,
+            "rdf_hashes": _rdf_hashes(workflow_file, data_file, rule_file),
+            "repair_bundles": bundles,
+            "revision_results": [],
+        }
+        if conforms:
+            iteration_history.append(record)
+            history["status"] = "completed"
+            break
+        if revision_round >= max_cross_revision_iterations:
+            iteration_history.append(record)
+            history["status"] = "max_iterations"
+            break
+        if evaluation.get("can_auto_repair") is not True or not bundles:
+            iteration_history.append(record)
+            history["status"] = "not_auto_repairable"
+            break
+
+        revision_results: list[dict[str, Any]] = []
+        revision_failed = False
+        shacl_limits = {
+            AgentName.WORKFLOW: max_workflow_iterations,
+            AgentName.DATA: max_data_iterations,
+            AgentName.RULE: max_rule_iterations,
+        }
+        self_review_limits = {
+            AgentName.WORKFLOW: max_workflow_self_review_iterations,
+            AgentName.DATA: max_data_self_review_iterations,
+            AgentName.RULE: max_rule_self_review_iterations,
+        }
+        for bundle in bundles:
+            target = AgentName(str(bundle["target_agent"]))
+            result = run_targeted_rdf_revision(
+                target_agent=target,
+                repair_bundle=bundle,
+                consistency_iteration=consistency_iteration,
+                scenario_file=scenario_file,
+                pdf_file=pdf_file,
+                model=model,
+                workflow_file=workflow_file,
+                data_file=data_file,
+                rule_file=rule_file,
+                workflow_shapes_file=workflow_dir / "workflow_shapes_generated.ttl",
+                data_shapes_file=data_rule_dir / "data_shapes_generated.ttl",
+                rule_shapes_file=data_rule_dir / "rule_shapes_generated.ttl",
+                workflow_ontology_file=workflow_ontology_file,
+                data_ontology_file=data_ontology_file,
+                rule_ontology_file=rule_ontology_file,
+                workflow_validation_file=workflow_dir / "workflow_validation.json",
+                data_validation_file=data_rule_dir / "data_validation.json",
+                rule_validation_file=data_rule_dir / "rule_validation.json",
+                workflow_revision_history_file=(
+                    workflow_dir / "workflow_revision_history.json"
+                ),
+                data_revision_history_file=(
+                    data_rule_dir / "data_revision_history.json"
+                ),
+                rule_revision_history_file=(
+                    data_rule_dir / "rule_revision_history.json"
+                ),
+                workflow_self_review_file=workflow_dir / "workflow_self_review.json",
+                data_self_review_file=data_rule_dir / "data_self_review.json",
+                rule_self_review_file=data_rule_dir / "rule_self_review.json",
+                max_shacl_iterations=shacl_limits[target],
+                max_self_review_iterations=self_review_limits[target],
+            )
+            revision_results.append(result)
+            if result.get("final_status") != "completed":
+                revision_failed = True
+                break
+        record["revision_results"] = revision_results
+        record["rdf_hashes_after_revision"] = _rdf_hashes(
+            workflow_file,
+            data_file,
+            rule_file,
+        )
+        iteration_history.append(record)
+        write_json(history_file, history)
+        if revision_failed:
+            history["status"] = "individual_revision_failed"
+            break
+
+        revision_round += 1
+        consistency_iteration += 1
+        consistency_result = run_consistency_pipeline(
+            model=model,
+            workflow_file=workflow_file,
+            data_file=data_file,
+            rule_file=rule_file,
+            workflow_validation_file=workflow_dir / "workflow_validation.json",
+            data_validation_file=data_rule_dir / "data_validation.json",
+            rule_validation_file=data_rule_dir / "rule_validation.json",
+            output_dir=consistency_dir,
+            workflow_ontology_file=workflow_ontology_file,
+            data_ontology_file=data_ontology_file,
+            rule_ontology_file=rule_ontology_file,
+            cross_shacl_file=cross_shapes_file,
+            expected_cross_shapes_hash=cross_shapes_hash,
+        )
+
+    history["revision_rounds"] = revision_round
+    history["final_consistency_status"] = consistency_result.get("final_status")
+    write_json(history_file, history)
+    return consistency_result, history
+
+
 def run_end_to_end_controller(
     pdf_file: Path | str,
     model: str,
@@ -157,6 +399,7 @@ def run_end_to_end_controller(
     ),
     max_data_self_review_iterations: int = DEFAULT_MAX_DATA_SELF_REVIEW_ITERATIONS,
     max_rule_self_review_iterations: int = DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS,
+    max_cross_revision_iterations: int = DEFAULT_MAX_CROSS_REVISION_ITERATIONS,
     reviewer: str | None = None,
 ) -> ControllerRunSummary:
     """Run Scenario through Human Review in sequence."""
@@ -300,18 +543,25 @@ def run_end_to_end_controller(
 
     consistency_stage = _stage_result(summary, ControllerStage.CONSISTENCY)
     try:
-        consistency_result = run_consistency_pipeline(
+        consistency_result, consistency_history = run_consistency_revision_loop(
             model=model,
-            workflow_file=workflow_dir / "workflow_final.ttl",
-            data_file=data_rule_dir / "data_final.ttl",
-            rule_file=data_rule_dir / "rule_final.ttl",
-            workflow_validation_file=workflow_dir / "workflow_validation.json",
-            data_validation_file=data_rule_dir / "data_validation.json",
-            rule_validation_file=data_rule_dir / "rule_validation.json",
-            output_dir=consistency_dir,
+            pdf_file=pdf_file,
+            scenario_file=scenario_file,
+            workflow_dir=workflow_dir,
+            data_rule_dir=data_rule_dir,
+            consistency_dir=consistency_dir,
             workflow_ontology_file=workflow_ontology_file,
             data_ontology_file=data_ontology_file,
             rule_ontology_file=rule_ontology_file,
+            max_cross_revision_iterations=max_cross_revision_iterations,
+            max_workflow_iterations=max_workflow_iterations,
+            max_data_iterations=max_data_iterations,
+            max_rule_iterations=max_rule_iterations,
+            max_workflow_self_review_iterations=(
+                max_workflow_self_review_iterations
+            ),
+            max_data_self_review_iterations=max_data_self_review_iterations,
+            max_rule_self_review_iterations=max_rule_self_review_iterations,
         )
     except Exception as error:
         return _finish_failed_run(
@@ -333,6 +583,9 @@ def run_end_to_end_controller(
         "consistency_evaluation": str(
             consistency_dir / "consistency_evaluation.json"
         ),
+        "consistency_revision_history": str(
+            consistency_dir / "consistency_revision_history.json"
+        ),
     }
     summary.output_files.update(consistency_stage.output_files)
     if consistency_status not in {"completed", "needs_revision"}:
@@ -347,6 +600,11 @@ def run_end_to_end_controller(
         ControllerStageStatus.COMPLETED
         if consistency_status == "completed"
         else ControllerStageStatus.NEEDS_REVIEW
+    )
+    consistency_stage.error_message = (
+        None
+        if consistency_status == "completed"
+        else f"Consistency revision loop ended: {consistency_history['status']}"
     )
     _save_controller_summary(summary, summary_path)
 
@@ -582,6 +840,11 @@ def build_run_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-data-self-review-iterations", type=int, default=None)
     parser.add_argument("--max-rule-self-review-iterations", type=int, default=None)
+    parser.add_argument(
+        "--max-cross-revision-iterations",
+        type=int,
+        default=None,
+    )
     parser.add_argument("--reviewer", default=None)
     return parser
 
@@ -656,6 +919,11 @@ def run(argv: Sequence[str] | None = None) -> int:
                 max_rule_self_review_iterations=(
                     args.max_rule_self_review_iterations
                     if args.max_rule_self_review_iterations is not None
+                    else config.max_repair_iterations
+                ),
+                max_cross_revision_iterations=(
+                    args.max_cross_revision_iterations
+                    if args.max_cross_revision_iterations is not None
                     else config.max_repair_iterations
                 ),
                 reviewer=args.reviewer,

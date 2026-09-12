@@ -133,15 +133,20 @@ def run_consistency_pipeline(
     data_ontology_file: Path | str = DEFAULT_DATA_ONTOLOGY,
     rule_ontology_file: Path | str = DEFAULT_RULE_ONTOLOGY,
     runner: Callable[..., Any] | None = None,
+    cross_shacl_file: Path | str | None = None,
+    expected_cross_shapes_hash: str | None = None,
 ) -> dict[str, Any]:
-    """Generate one Cross-SHACL graph, validate merged RDF, and analyze violations."""
+    """Generate or reuse Cross-SHACL, validate merged RDF, and analyze violations."""
 
     consistency_dir = Path(output_dir)
     consistency_dir.mkdir(parents=True, exist_ok=True)
     shapes_path = consistency_dir / "consistency_shapes_generated.ttl"
     validation_path = consistency_dir / "consistency_validation.json"
     evaluation_path = consistency_dir / "consistency_evaluation.json"
-    for stale_path in (shapes_path, validation_path, evaluation_path):
+    stale_paths = (validation_path, evaluation_path)
+    if cross_shacl_file is None:
+        stale_paths = (shapes_path, *stale_paths)
+    for stale_path in stale_paths:
         stale_path.unlink(missing_ok=True)
 
     workflow_path, workflow_turtle = _load_required_turtle(
@@ -174,14 +179,24 @@ def run_consistency_pipeline(
         data_ontology_turtle=data_ontology,
         rule_ontology_turtle=rule_ontology,
     )
-    shacl_output = run_consistency_agent(
-        ConsistencyAgentMode.CROSS_SHACL_GENERATION,
-        agent_input.model_dump(mode="json", exclude_none=True),
-        model=model,
-        runner=runner,
-    )
-    cross_shacl_turtle = _require_cross_shacl(shacl_output.cross_shacl_turtle)
-    write_text(shapes_path, cross_shacl_turtle)
+    if cross_shacl_file is None:
+        shacl_output = run_consistency_agent(
+            ConsistencyAgentMode.CROSS_SHACL_GENERATION,
+            agent_input.model_dump(mode="json", exclude_none=True),
+            model=model,
+            runner=runner,
+        )
+        cross_shacl_turtle = _require_cross_shacl(shacl_output.cross_shacl_turtle)
+        write_text(shapes_path, cross_shacl_turtle)
+        cross_shacl_source = "ai_generated"
+    else:
+        cross_shacl_source_path, cross_shacl_turtle = _load_required_turtle(
+            cross_shacl_file,
+            "generated Cross-SHACL",
+        )
+        if cross_shacl_source_path != shapes_path.resolve():
+            write_text(shapes_path, cross_shacl_turtle)
+        cross_shacl_source = "reused"
 
     combined_ontology = "\n\n".join(ontology_turtles)
     shapes_validation = validate_ontology_and_shapes(
@@ -194,6 +209,14 @@ def run_consistency_pipeline(
             f"{shapes_validation.model_dump(mode='json')}"
         )
     cross_shapes_hash = content_hash(cross_shacl_turtle)
+    if (
+        expected_cross_shapes_hash is not None
+        and cross_shapes_hash != expected_cross_shapes_hash
+    ):
+        raise ValueError(
+            "Cross-SHACL hash changed during consistency revision loop: "
+            f"expected={expected_cross_shapes_hash}, actual={cross_shapes_hash}"
+        )
     _assert_fixed_hashes(
         ontology_turtles,
         ontology_hashes,
@@ -275,6 +298,9 @@ def run_consistency_pipeline(
         "data_ontology_file": str(data_ontology_path),
         "rule_ontology_file": str(rule_ontology_path),
         "shapes_validation": shapes_validation.model_dump(mode="json"),
+        "cross_shacl_file": str(shapes_path.resolve()),
+        "cross_shacl_source": cross_shacl_source,
+        "cross_shapes_hash": cross_shapes_hash,
         "validation": _validation_payload(validation),
         "evaluation": evaluation.model_dump(mode="json"),
     }

@@ -92,6 +92,9 @@ PDF本文、Scenario RDF、RDFLibのparse error、語彙検証結果、SHACL検�
 現在のWorkflow RDF、修正履歴を使ってWorkflow RDFを修正してください。
 入力にself_review_resultがある場合は、各findingのevidenceとrevision_instructionも使ってください。
 Self-Review findingでもPDF本文またはScenario RDFに根拠が確認できない変更は行わないでください。
+入力にcross_consistency_revisionがある場合は、同じ対象RDF向けに集約されたCross-SHACL違反、
+原因、修正指示をまとめて処理してください。related_rdfsは参照整合性の確認にだけ使用してください。
+Cross違反の解消だけを目的としてPDF本文またはScenario RDFに根拠のない業務知識を追加しないでください。
 SHACL違反を解消するためにPDF本文に根拠のない情報を追加しないでください。
 根拠のない業務仮定を置かなければ修正できない問題は、
 remaining_violationsとunresolved_itemsに残してください。

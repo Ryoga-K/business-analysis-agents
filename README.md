@@ -19,7 +19,8 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - 検証済みData RDFを参照したRule RDFの生成、検証、修正ループ
 - AI生成Cross-SHACLによるWorkflow/Data/Rule RDF間の整合性検証
 - Cross-SHACL違反の原因、修正対象Agent、修正指示の構造化出力
-- Python ControllerによるPDFからConsistency評価までのEnd-to-End実行
+- Controllerによる対象RDF単位のCross revision、個別SHACL再検証、Self-Review、Cross再検証
+- Python ControllerによるPDFからHuman ReviewまでのEnd-to-End実行
 - 工程失敗時の後続停止と`run_summary.json`への実行結果保存
 - SHACL構造に基づくConsistency findingのグループレビューと構造化結果保存
 - 実行結果のJSON / Turtle保存
@@ -38,7 +39,8 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - Workflow/Data/RuleはSHACL適合後にPDF・Scenario RDF・対象RDFをAIでSelf-Reviewし、意味的な欠落・矛盾・誤抽出があればRDFだけを再修正する。
 - Cross-SHACLも1回だけ生成・固定し、整合性の適合判定は統合Graphに対するpySHACLで行う。
 - End-to-End ControllerはAI判断を行わず、既存pipelineを決められた順序で呼び出す。
-- Consistencyの不適合は実行エラーとせず、評価結果を保存して正常終了する。
+- Consistency不適合時は対象Agent別に指示を集約して自動revisionし、同じ個別SHACLとCross-SHACLで再検証する。
+- 最大Cross revision回数後も不適合の場合は実行エラーとせず、Human Reviewへ進む。
 - Human ReviewはRDFやAgentを再実行せず、人間の判断と補足情報だけを保存する。
 - ontologyが存在しない場合は停止し、LLM生成へフォールバックしない。
 - SQL、DB、Web UIは現時点では使用しない。
@@ -134,6 +136,8 @@ PDF
      └─ Workflow RDF + individual validation + Self-Review
          └─ Data RDF / Rule RDF + individual validation + Self-Review
              └─ Cross-SHACL validation + Consistency evaluation
+                 ├─ violation: targeted RDF revision
+                 │   └─ individual SHACL + Self-Review + Cross recheck
                  └─ Human Review
 ```
 
@@ -147,10 +151,13 @@ PDF
 - `outputs/data_rule/data_self_review.json`
 - `outputs/data_rule/rule_self_review.json`
 - `outputs/consistency/consistency_evaluation.json`
+- `outputs/consistency/consistency_revision_history.json`
 - `outputs/human_review/human_review.json`
 - `outputs/controller/run_summary.json`
 
-WorkflowまたはData/Ruleの個別検証が未適合の場合と、工程内で例外が発生した場合は後続工程を実行しません。Consistencyが`needs_revision`を返した場合もHuman Reviewへ進みます。findingや人間の判断内容はシステムエラーとせず、Human Reviewの入出力処理が失敗した場合だけ全体を失敗とします。
+WorkflowまたはData/Ruleの個別検証が未適合の場合と、工程内で例外が発生した場合は後続工程を実行しません。自動Cross revision後もConsistencyが`needs_revision`の場合はHuman Reviewへ進みます。findingや人間の判断内容はシステムエラーとせず、Human Reviewの入出力処理が失敗した場合だけ全体を失敗とします。
+
+ControllerのCross revision回数は`--max-cross-revision-iterations`で変更できます。デフォルトは`MAX_REPAIR_ITERATIONS`です。
 
 ### 3. PDFからScenario RDFを生成
 
@@ -261,6 +268,8 @@ python -m business_analysis_agents consistency
 - `outputs/consistency/consistency_validation.json`
 - `outputs/consistency/consistency_evaluation.json`
 
+個別`consistency` CLIはCross検証と違反分析までを実行します。対象RDFの自動revisionループは、PDFとScenario RDFを参照できる統合CLIの`run --pdf`で実行します。
+
 入力RDFやOntologyを変更する場合:
 
 ```powershell
@@ -347,7 +356,9 @@ Workflow/Data/Rule RDFと3つの固定Ontologyを入力し、次の2モードで
 - `cross_shacl_generation`: 明示されたRDF間参照・型・URI整合性を検証するCross-SHACLを生成
 - `violation_analysis`: pySHACL違反の原因、修正対象Agent、RDF修正指示を構造化
 
-RDFLibで3 RDFと3 Ontologyをそれぞれ統合してpySHACL検証します。現在の固定Ontologyと生成済みRDFには3 RDF間の直接URI参照がないため、名称類似だけを根拠とした対応付けは行いません。Consistency Agentは修正指示までを出力し、抽出Agentの自動再実行は行いません。
+RDFLibで3 RDFと3 Ontologyをそれぞれ統合してpySHACL検証します。現在の固定Ontologyと生成済みRDFには3 RDF間の直接URI参照がないため、名称類似だけを根拠とした対応付けは行いません。
+
+Controllerでは、違反分析を`workflow`、`data`、`rule`ごとに集約し、対象RDFにつき1回のrevisionを実行します。revision後は生成済みの個別SHACLで検証し、Self-Reviewを通過した場合だけCross検証へ戻します。Cross-SHACLは初回に1回だけ生成し、以後は初回ハッシュと一致する同じTTLを再利用します。各反復は`consistency_revision_history.json`へ保存します。
 
 ### Human Review
 
@@ -375,12 +386,11 @@ python -m pytest
 直近の確認結果:
 
 ```text
-63 passed
+68 passed
 ```
 
 ## 未実装
 
-- Consistency Agentから抽出Agentを自動再実行する修正ループ
 - Consistency AgentのSelf-Review
 - Human Review Web UI
 - 人間への問い合わせ生成UI

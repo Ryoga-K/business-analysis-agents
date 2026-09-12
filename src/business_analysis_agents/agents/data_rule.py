@@ -83,6 +83,9 @@ PDF本文、Scenario RDF、現在のData RDF、RDFLibのparse error、語彙検�
 pySHACL結果、修正履歴を使って修正してください。ontology_turtleやData SHACL shapesは変更しないでください。
 入力にself_review_resultがある場合は、各findingのevidenceとrevision_instructionも使ってください。
 Self-Review findingでもPDF本文またはScenario RDFに根拠が確認できない変更は行わないでください。
+入力にcross_consistency_revisionがある場合は、Data RDF向けに集約されたCross-SHACL違反、
+原因、修正指示をまとめて処理してください。related_rdfsは参照整合性の確認にだけ使用してください。
+Cross違反の解消だけを目的としてPDF本文またはScenario RDFに根拠のないデータを追加しないでください。
 SHACL違反を解消するためにPDF本文に根拠のない情報を追加しないでください。根拠不足の情報は削除するか、
 必要に応じて未解決事項として残してください。
 data_rdf_turtleは必須です。
@@ -156,6 +159,9 @@ PDF本文、Scenario RDF、前回のRule RDF、検証済みData RDF、固定済�
 修正してください。ontology_turtleやRule SHACL shapesは変更しないでください。
 入力にself_review_resultがある場合は、各findingのevidenceとrevision_instructionも使ってください。
 Self-Review findingでもPDF本文またはScenario RDFに根拠が確認できない変更は行わないでください。
+入力にcross_consistency_revisionがある場合は、Rule RDF向けに集約されたCross-SHACL違反、
+原因、修正指示をまとめて処理してください。related_rdfsは参照整合性の確認にだけ使用してください。
+Cross違反の解消だけを目的としてPDF本文またはScenario RDFに根拠のないルールを追加しないでください。
 SHACL違反を解消するためにPDF本文に根拠のない業務ルールを追加しないでください。
 rule_rdf_turtleは必須です。
 """.strip()
