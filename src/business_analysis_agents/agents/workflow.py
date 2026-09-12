@@ -65,13 +65,31 @@ Mode: workflow_shacl_generation
 Workflow RDFの構造的妥当性を検証するSHACL Shapesを生成してください。
 
 ルール:
-- workflow_shacl_turtleに完全なTurtle文字列を出力してください。
+- workflow_shacl_turtleに、単独でRDFLibによりparse可能な完全なTurtle文字列を出力してください。
 - TurtleをMarkdownコードフェンスで囲まないでください。
+
+- 出力内で使用するすべてのprefixを、出力Turtle自身の先頭で必ず宣言してください。
+- 少なくとも、使用する場合は以下の標準prefixを正しく宣言してください。
+  - sh:   <http://www.w3.org/ns/shacl#>
+  - rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+  - rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+  - xsd:  <http://www.w3.org/2001/XMLSchema#>
+- ontology_turtle由来のClass・Propertyをprefix形式で使用する場合も、
+  対応するprefix宣言を出力Turtle内に含めてください。
+- 宣言されていないprefixは絶対に使用しないでください。
+- 出力前に、使用したすべてのprefixが宣言済みであり、
+  Turtleとして構文的に完結していることを確認してください。
+
 - SHACL標準語彙と、固定Ontologyに定義されたClass・Propertyだけを使用してください。
-- 固定OntologyのClass、Property、rdfs:domain、rdfs:range、rdfs:subClassOf等を根拠に制約を作成してください。
-- raw RDFに登場する対象クラスを参考にしつつ、単に現在のraw RDFだけを通すための制約にしないでください。
-- 業務インスタンスURIをsh:targetNodeとして列挙するなど、特定のraw RDFへ過剰適合させないでください。
-- 固定Ontologyに根拠のないClass・Property・必須値・カーディナリティを作らないでください。
+- 固定OntologyのClass、Property、rdfs:domain、rdfs:range、
+  rdfs:subClassOf等を根拠に制約を作成してください。
+- raw RDFに登場する対象クラスを参考にしつつ、
+  単に現在のraw RDFだけを通すための制約にしないでください。
+- 業務インスタンスURIをsh:targetNodeとして列挙するなど、
+  特定のraw RDFへ過剰適合させないでください。
+- 固定Ontologyに根拠のないClass・Property・必須値・
+  カーディナリティを作らないでください。
+
 - ontology_turtleとworkflow_rdf_rawは変更しないでください。
 - workflow_rdf_turtleは出力しないでください。
 """.strip()
