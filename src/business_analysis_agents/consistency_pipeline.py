@@ -25,6 +25,7 @@ from business_analysis_agents.models import (
 )
 from business_analysis_agents.rdf_validation import (
     content_hash,
+    parse_turtle,
     validate_cross_rdf,
     validate_ontology_and_shapes,
 )
@@ -63,7 +64,7 @@ def _require_cross_shacl(value: str | None) -> str:
     return value
 
 
-def _require_conforming_validation(path: Path | str, label: str) -> Path:
+def _require_validation_result(path: Path | str, label: str) -> Path:
     validation_path = Path(path)
     if not validation_path.is_file():
         raise FileNotFoundError(
@@ -75,11 +76,18 @@ def _require_conforming_validation(path: Path | str, label: str) -> Path:
         raise ValueError(
             f"Invalid {label} validation JSON: {validation_path}: {error}"
         ) from error
-    if payload.get("conforms") is not True:
-        raise ValueError(
-            f"{label} RDF has not passed individual validation: {validation_path}"
-        )
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("conforms"), bool
+    ):
+        raise ValueError(f"Invalid {label} validation result: {validation_path}")
     return validation_path.resolve()
+
+
+def _require_parseable_rdf(turtle: str, label: str) -> None:
+    graph, errors = parse_turtle(turtle)
+    if graph is None:
+        details = "; ".join(error.error_message for error in errors)
+        raise ValueError(f"Required {label} is not parseable Turtle: {details}")
 
 
 def _validation_payload(validation: CrossRdfValidationResult) -> dict[str, Any]:
@@ -161,11 +169,14 @@ def run_consistency_pipeline(
     )
     data_path, data_turtle = _load_required_turtle(data_file, "Data RDF")
     rule_path, rule_turtle = _load_required_turtle(rule_file, "Rule RDF")
-    workflow_validation_path = _require_conforming_validation(
+    _require_parseable_rdf(workflow_turtle, "Workflow RDF")
+    _require_parseable_rdf(data_turtle, "Data RDF")
+    _require_parseable_rdf(rule_turtle, "Rule RDF")
+    workflow_validation_path = _require_validation_result(
         workflow_validation_file, "Workflow"
     )
-    data_validation_path = _require_conforming_validation(data_validation_file, "Data")
-    rule_validation_path = _require_conforming_validation(rule_validation_file, "Rule")
+    data_validation_path = _require_validation_result(data_validation_file, "Data")
+    rule_validation_path = _require_validation_result(rule_validation_file, "Rule")
     workflow_ontology_path, workflow_ontology = load_fixed_turtle(
         workflow_ontology_file, "Workflow ontology"
     )

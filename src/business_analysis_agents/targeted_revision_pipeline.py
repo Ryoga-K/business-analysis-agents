@@ -206,6 +206,17 @@ def run_targeted_rdf_revision(
     ontology_hash = content_hash(ontology_turtle)
     shapes_hash = content_hash(shapes_turtle)
     revision_history = _load_history(history_files[target_agent])
+    is_human_review_revision = repair_bundle.get("source") == "human_review"
+    revision_phase = (
+        "human_review_revision"
+        if is_human_review_revision
+        else "cross_consistency_revision"
+    )
+    repair_phase = (
+        "human_review_shacl_repair"
+        if is_human_review_revision
+        else "cross_revision_shacl_repair"
+    )
 
     def assert_fixed() -> None:
         _assert_fixed_resources(
@@ -247,7 +258,6 @@ def run_targeted_rdf_revision(
             "scenario_rdf_turtle": scenario_turtle,
             "source_document": source_document,
             "ontology_turtle": ontology_turtle,
-            "cross_consistency_revision": repair_bundle,
             "related_rdfs": {
                 agent.value: turtle for agent, turtle in rdf_turtles.items()
             },
@@ -256,6 +266,10 @@ def run_targeted_rdf_revision(
             "revision_history": revision_history,
             "ontology_hash": ontology_hash,
         }
+        if is_human_review_revision:
+            payload["human_review_revision"] = repair_bundle
+        else:
+            payload["cross_consistency_revision"] = repair_bundle
         if target_agent is AgentName.WORKFLOW:
             payload.update(
                 {
@@ -325,17 +339,20 @@ def run_targeted_rdf_revision(
         step="shacl_validation",
         status=ProgressStatus.PASSED if validation.conforms else ProgressStatus.FAILED,
         message=(
-            f"{target_agent.value.title()} validation passed"
+            f"{target_agent.value.title()} SHACL re-validation passed"
             if validation.conforms
-            else f"{target_agent.value.title()} validation found violations"
+            else (
+                f"{target_agent.value.title()} SHACL re-validation found "
+                "violations"
+            )
         ),
     )
     revision_history.append(
         {
             "iteration": revision_iteration,
-            "phase": "cross_consistency_revision",
+            "phase": revision_phase,
             "consistency_iteration": consistency_iteration,
-            "cross_consistency_revision": repair_bundle,
+            revision_phase: repair_bundle,
             "output": revision_output.model_dump(mode="json"),
             "validation": _validation_payload(validation),
         }
@@ -366,9 +383,9 @@ def run_targeted_rdf_revision(
                 else ProgressStatus.FAILED
             ),
             message=(
-                f"{target_agent.value.title()} validation passed"
+                f"{target_agent.value.title()} SHACL re-validation passed"
                 if validation.conforms
-                else f"{target_agent.value.title()} violations remain"
+                else f"{target_agent.value.title()} SHACL violations remain"
             ),
             iteration=repair_iteration,
             max_iterations=MAX_REVISION_ITERATIONS,
@@ -376,9 +393,9 @@ def run_targeted_rdf_revision(
         revision_history.append(
             {
                 "iteration": revision_iteration,
-                "phase": "cross_revision_shacl_repair",
+                "phase": repair_phase,
                 "consistency_iteration": consistency_iteration,
-                "cross_consistency_revision": repair_bundle,
+                revision_phase: repair_bundle,
                 "output": revision_output.model_dump(mode="json"),
                 "validation": _validation_payload(validation),
             }
@@ -394,6 +411,8 @@ def run_targeted_rdf_revision(
             "self_review_iteration": review_iteration,
             "ontology_hash": ontology_hash,
         }
+        if is_human_review_revision:
+            payload["human_review_revision"] = repair_bundle
         if target_agent is AgentName.WORKFLOW:
             payload.update(
                 {

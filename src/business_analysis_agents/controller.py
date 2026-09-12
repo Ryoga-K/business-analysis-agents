@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -52,10 +53,17 @@ from business_analysis_agents.models import (
     ControllerStage,
     ControllerStageResult,
     ControllerStageStatus,
+    FinalArtifactSummary,
+    FinalizationStatus,
+    HumanReviewDecision,
+    HumanReviewReport,
+    IndividualRdfIssueSummary,
+    RdfKind,
+    ReviewStatus,
     RunStatus,
     ScenarioAgentInput,
 )
-from business_analysis_agents.rdf_validation import content_hash
+from business_analysis_agents.rdf_validation import content_hash, parse_turtle
 from business_analysis_agents.progress import (
     ProgressReporter,
     ProgressStatus,
@@ -71,7 +79,11 @@ from business_analysis_agents.review.cli import (
     HumanReviewInputError,
     run_human_review,
 )
-from business_analysis_agents.workflow_pipeline import run_workflow_pipeline, write_json
+from business_analysis_agents.workflow_pipeline import (
+    run_workflow_pipeline,
+    write_json,
+    write_text,
+)
 from business_analysis_agents.targeted_revision_pipeline import (
     run_targeted_rdf_revision,
 )
@@ -141,7 +153,7 @@ def _finish_failed_run(
     stage: ControllerStage,
     error_type: str,
     error_message: str,
-    stage_status: ControllerStageStatus = ControllerStageStatus.FAILED,
+    stage_status: ControllerStageStatus = ControllerStageStatus.FATAL_FAILED,
     progress: ProgressReporter | None = None,
 ) -> ControllerRunSummary:
     result = _stage_result(summary, stage)
@@ -151,8 +163,10 @@ def _finish_failed_run(
     for later_result in summary.stages:
         if later_result.status is ControllerStageStatus.PENDING:
             later_result.status = ControllerStageStatus.SKIPPED
-    summary.status = RunStatus.FAILED
+    summary.status = RunStatus.FATAL_FAILED
     summary.completed = False
+    summary.final_status = FinalizationStatus.PIPELINE_FAILED
+    summary.fatal_error = True
     summary.failed_stage = stage
     summary.error_message = error_message
     summary.finished_at = datetime.now().astimezone()
@@ -163,7 +177,7 @@ def _finish_failed_run(
         step="phase",
         status=(
             ProgressStatus.WARNING
-            if stage_status is ControllerStageStatus.NEEDS_REVIEW
+            if stage_status is ControllerStageStatus.COMPLETED_WITH_ISSUES
             else ProgressStatus.FAILED
         ),
         message=(
@@ -222,6 +236,565 @@ def _group_consistency_repairs(
             }
         )
     return [grouped[target] for target in allowed if target in grouped]
+
+
+def _group_human_review_repairs(
+    human_review: HumanReviewReport,
+) -> list[dict[str, Any]]:
+    """Collect revision-approved Human Review findings once per target RDF."""
+
+    revision_decisions = {
+        HumanReviewDecision.APPROVE_FINDING,
+        HumanReviewDecision.PROVIDE_CONTEXT,
+    }
+    grouped: dict[AgentName, dict[str, Any]] = {}
+    allowed = (AgentName.WORKFLOW, AgentName.DATA, AgentName.RULE)
+    for finding in human_review.findings:
+        if finding.decision not in revision_decisions:
+            continue
+        target = finding.source_analysis.target_agent
+        if target not in allowed:
+            raise ValueError(
+                f"Unsupported Human Review revision target: {target.value}"
+            )
+        instruction = finding.source_analysis.repair_instruction
+        if finding.supplemental_comment:
+            instruction = (
+                f"{instruction}\nHuman Review supplemental context: "
+                f"{finding.supplemental_comment}"
+            )
+        bundle = grouped.setdefault(
+            target,
+            {
+                "source": "human_review",
+                "target_agent": target.value,
+                "violation_indices": [],
+                "target_resources": [],
+                "repair_instructions": [],
+                "items": [],
+            },
+        )
+        bundle["violation_indices"].append(
+            finding.consistency_violation_index
+        )
+        if finding.target_resource not in bundle["target_resources"]:
+            bundle["target_resources"].append(finding.target_resource)
+        if instruction not in bundle["repair_instructions"]:
+            bundle["repair_instructions"].append(instruction)
+        bundle["items"].append(
+            {
+                "finding_id": finding.finding_id,
+                "target_resource": finding.target_resource,
+                "human_decision": finding.decision.value,
+                "human_response": finding.supplemental_comment,
+                "violation": finding.source_violation.model_dump(mode="json"),
+                "analysis": finding.source_analysis.model_dump(mode="json"),
+                "revision_instruction": instruction,
+            }
+        )
+    return [grouped[target] for target in allowed if target in grouped]
+
+
+def _load_json_object(path: Path, label: str) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Required {label} was not found: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid {label} JSON: {path}: {error}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must be a JSON object: {path}")
+    return payload
+
+
+def _history_length(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid revision history JSON: {path}: {error}") from error
+    if not isinstance(payload, list):
+        raise ValueError(f"Revision history must be a JSON array: {path}")
+    return len(payload)
+
+
+def _require_parseable_turtle(path: Path | str, label: str) -> str:
+    turtle_path = Path(path)
+    if not turtle_path.is_file():
+        raise FileNotFoundError(f"Required {label} was not found: {turtle_path}")
+    turtle = turtle_path.read_text(encoding="utf-8")
+    if not turtle.strip():
+        raise ValueError(f"Required {label} is empty: {turtle_path}")
+    graph, errors = parse_turtle(turtle)
+    if graph is None:
+        details = "; ".join(error.error_message for error in errors)
+        raise ValueError(f"Required {label} is not parseable Turtle: {details}")
+    return turtle
+
+
+def _collect_rdf_issue_summary(
+    *,
+    rdf_kind: RdfKind,
+    rdf_file: Path,
+    shapes_file: Path,
+    validation_file: Path,
+    self_review_file: Path,
+    revision_history_file: Path,
+) -> IndividualRdfIssueSummary:
+    """Require downstream artifacts and retain unresolved quality findings."""
+
+    _require_parseable_turtle(rdf_file, f"{rdf_kind.value.title()} RDF")
+    _require_parseable_turtle(
+        shapes_file,
+        f"generated {rdf_kind.value.title()} SHACL",
+    )
+    validation = _load_json_object(
+        validation_file,
+        f"{rdf_kind.value.title()} validation",
+    )
+    self_review = _load_json_object(
+        self_review_file,
+        f"{rdf_kind.value.title()} Self-Review",
+    )
+    _history_length(revision_history_file)
+
+    conforms = validation.get("conforms")
+    if not isinstance(conforms, bool):
+        raise ValueError(
+            f"{rdf_kind.value.title()} validation must contain boolean conforms: "
+            f"{validation_file}"
+        )
+    shacl_conforms = validation.get("shacl_conforms", conforms)
+    if not isinstance(shacl_conforms, bool):
+        raise ValueError(
+            f"{rdf_kind.value.title()} validation must contain boolean "
+            f"shacl_conforms: {validation_file}"
+        )
+    shacl_result = validation.get("shacl_result")
+    shacl_violations = (
+        shacl_result.get("violations", [])
+        if isinstance(shacl_result, dict)
+        else []
+    )
+    if not isinstance(shacl_violations, list):
+        raise ValueError(f"Invalid SHACL violations in {validation_file}")
+
+    vocabulary = validation.get("vocabulary")
+    vocabulary = vocabulary if isinstance(vocabulary, dict) else {}
+    unauthorized_terms = vocabulary.get("unauthorized_terms", [])
+    if not isinstance(unauthorized_terms, list):
+        raise ValueError(f"Invalid unauthorized terms in {validation_file}")
+
+    self_review_status = self_review.get("status")
+    if not isinstance(self_review_status, str) or not self_review_status:
+        raise ValueError(
+            f"{rdf_kind.value.title()} Self-Review must contain status: "
+            f"{self_review_file}"
+        )
+    final_result = self_review.get("final_result")
+    self_review_findings = (
+        final_result.get("findings", [])
+        if isinstance(final_result, dict)
+        else []
+    )
+    if not isinstance(self_review_findings, list):
+        raise ValueError(f"Invalid Self-Review findings in {self_review_file}")
+
+    return IndividualRdfIssueSummary(
+        rdf_kind=rdf_kind,
+        rdf_file=str(rdf_file),
+        usable=True,
+        validation_conforms=conforms,
+        shacl_conforms=shacl_conforms,
+        shacl_violation_count=len(shacl_violations),
+        shacl_violations=shacl_violations,
+        vocabulary_violation_count=len(unauthorized_terms),
+        unauthorized_terms=[str(term) for term in unauthorized_terms],
+        self_review_status=self_review_status,
+        self_review_finding_count=len(self_review_findings),
+        self_review_findings=self_review_findings,
+    )
+
+
+def _collect_all_rdf_issues(
+    workflow_dir: Path,
+    data_rule_dir: Path,
+) -> dict[str, IndividualRdfIssueSummary]:
+    locations = {
+        RdfKind.WORKFLOW: workflow_dir,
+        RdfKind.DATA: data_rule_dir,
+        RdfKind.RULE: data_rule_dir,
+    }
+    return {
+        rdf_kind.value: _collect_rdf_issue_summary(
+            rdf_kind=rdf_kind,
+            rdf_file=directory / f"{rdf_kind.value}_final.ttl",
+            shapes_file=directory / f"{rdf_kind.value}_shapes_generated.ttl",
+            validation_file=directory / f"{rdf_kind.value}_validation.json",
+            self_review_file=directory / f"{rdf_kind.value}_self_review.json",
+            revision_history_file=(
+                directory / f"{rdf_kind.value}_revision_history.json"
+            ),
+        )
+        for rdf_kind, directory in locations.items()
+    }
+
+
+def _report_rdf_issues(
+    issue: IndividualRdfIssueSummary,
+    progress: ProgressReporter | None,
+) -> None:
+    if not issue.has_issues:
+        return
+    name = issue.rdf_kind.value.title()
+    if issue.shacl_violation_count or not issue.validation_conforms:
+        report_progress(
+            progress,
+            phase=issue.rdf_kind.value,
+            step="shacl_validation",
+            status=ProgressStatus.WARNING,
+            message=(
+                f"{name} validation ended with "
+                f"{issue.shacl_violation_count} unresolved SHACL violation(s)"
+            ),
+        )
+    if issue.self_review_status != "passed":
+        report_progress(
+            progress,
+            phase=issue.rdf_kind.value,
+            step="self_review",
+            status=ProgressStatus.WARNING,
+            message=(
+                f"{name} Self-Review ended with "
+                f"{issue.self_review_finding_count} unresolved finding(s)"
+            ),
+        )
+    report_progress(
+        progress,
+        phase=issue.rdf_kind.value,
+        step="phase",
+        status=ProgressStatus.WARNING,
+        message=f"{name} completed with issues",
+    )
+    report_progress(
+        progress,
+        phase=issue.rdf_kind.value,
+        step="continue",
+        status=ProgressStatus.RUNNING,
+        message="Continuing to next phase",
+    )
+
+
+def _sync_individual_stage_states(
+    summary: ControllerRunSummary,
+) -> None:
+    workflow_issue = summary.individual_rdf_issues.get(RdfKind.WORKFLOW.value)
+    workflow_stage = _stage_result(summary, ControllerStage.WORKFLOW)
+    if workflow_issue is not None:
+        workflow_stage.unresolved_shacl_violation_count = (
+            workflow_issue.shacl_violation_count
+        )
+        workflow_stage.unresolved_self_review_finding_count = (
+            workflow_issue.self_review_finding_count
+        )
+        workflow_stage.status = (
+            ControllerStageStatus.COMPLETED_WITH_ISSUES
+            if workflow_issue.has_issues
+            else ControllerStageStatus.COMPLETED
+        )
+
+    data_issue = summary.individual_rdf_issues.get(RdfKind.DATA.value)
+    rule_issue = summary.individual_rdf_issues.get(RdfKind.RULE.value)
+    data_rule_stage = _stage_result(summary, ControllerStage.DATA_RULE)
+    if data_issue is not None and rule_issue is not None:
+        data_rule_stage.unresolved_shacl_violation_count = sum(
+            issue.shacl_violation_count for issue in (data_issue, rule_issue)
+        )
+        data_rule_stage.unresolved_self_review_finding_count = sum(
+            issue.self_review_finding_count for issue in (data_issue, rule_issue)
+        )
+        data_rule_stage.status = (
+            ControllerStageStatus.COMPLETED_WITH_ISSUES
+            if data_issue.has_issues or rule_issue.has_issues
+            else ControllerStageStatus.COMPLETED
+        )
+
+
+def run_human_review_revision(
+    *,
+    human_review: HumanReviewReport,
+    consistency_result: dict[str, Any],
+    consistency_iteration: int,
+    model: str,
+    pdf_file: Path | str,
+    scenario_file: Path | str,
+    workflow_dir: Path,
+    data_rule_dir: Path,
+    consistency_dir: Path,
+    human_review_dir: Path,
+    workflow_ontology_file: Path | str,
+    data_ontology_file: Path | str,
+    rule_ontology_file: Path | str,
+    progress: ProgressReporter | None = None,
+) -> dict[str, Any]:
+    """Apply Human Review instructions once and re-run fixed validations."""
+
+    bundles = _group_human_review_repairs(human_review)
+    has_pending = any(
+        finding.decision is HumanReviewDecision.PENDING
+        for finding in human_review.findings
+    )
+    result: dict[str, Any] = {
+        "revision_performed": bool(bundles),
+        "pending_decisions": has_pending,
+        "repair_bundles": bundles,
+        "revision_results": [],
+        "individual_checks_passed": True,
+        "consistency_result": consistency_result,
+    }
+    history_file = human_review_dir / "human_review_revision.json"
+    if not bundles:
+        if human_review.status is ReviewStatus.APPROVED:
+            result["final_status"] = (
+                FinalizationStatus.COMPLETED_WITHOUT_HUMAN_REVISION.value
+            )
+            result["unresolved_reason"] = None
+        else:
+            result["final_status"] = (
+                FinalizationStatus.UNRESOLVED_AFTER_HUMAN_REVIEW.value
+            )
+            result["unresolved_reason"] = (
+                "Human Review contains unresolved decisions."
+            )
+        write_json(history_file, result)
+        return result
+
+    workflow_file = workflow_dir / "workflow_final.ttl"
+    data_file = data_rule_dir / "data_final.ttl"
+    rule_file = data_rule_dir / "rule_final.ttl"
+    for bundle in bundles:
+        target = AgentName(str(bundle["target_agent"]))
+        with progress_operation(
+            progress,
+            phase="finalization",
+            step="human_review_revision",
+            message="Human Review revision",
+            completed_message="Human Review RDF revision completed",
+            target=target.value,
+            start_status=ProgressStatus.REVISION,
+        ):
+            revision_result = run_targeted_rdf_revision(
+                target_agent=target,
+                repair_bundle=bundle,
+                consistency_iteration=consistency_iteration,
+                scenario_file=scenario_file,
+                pdf_file=pdf_file,
+                model=model,
+                workflow_file=workflow_file,
+                data_file=data_file,
+                rule_file=rule_file,
+                workflow_shapes_file=(
+                    workflow_dir / "workflow_shapes_generated.ttl"
+                ),
+                data_shapes_file=data_rule_dir / "data_shapes_generated.ttl",
+                rule_shapes_file=data_rule_dir / "rule_shapes_generated.ttl",
+                workflow_ontology_file=workflow_ontology_file,
+                data_ontology_file=data_ontology_file,
+                rule_ontology_file=rule_ontology_file,
+                workflow_validation_file=(
+                    workflow_dir / "workflow_validation.json"
+                ),
+                data_validation_file=data_rule_dir / "data_validation.json",
+                rule_validation_file=data_rule_dir / "rule_validation.json",
+                workflow_revision_history_file=(
+                    workflow_dir / "workflow_revision_history.json"
+                ),
+                data_revision_history_file=(
+                    data_rule_dir / "data_revision_history.json"
+                ),
+                rule_revision_history_file=(
+                    data_rule_dir / "rule_revision_history.json"
+                ),
+                workflow_self_review_file=(
+                    workflow_dir / "workflow_self_review.json"
+                ),
+                data_self_review_file=data_rule_dir / "data_self_review.json",
+                rule_self_review_file=data_rule_dir / "rule_self_review.json",
+                progress=progress,
+            )
+        result["revision_results"].append(revision_result)
+        if revision_result.get("final_status") != "completed":
+            result["individual_checks_passed"] = False
+            report_progress(
+                progress,
+                phase=target.value,
+                step="human_review_revision",
+                status=ProgressStatus.WARNING,
+                message=(
+                    f"{target.value.title()} Human Review revision retained "
+                    "unresolved individual issues"
+                ),
+            )
+
+    cross_shapes_hash = str(consistency_result.get("cross_shapes_hash", ""))
+    if not cross_shapes_hash:
+        raise ValueError("Consistency result did not include cross_shapes_hash.")
+    final_consistency = run_consistency_pipeline(
+        model=model,
+        workflow_file=workflow_file,
+        data_file=data_file,
+        rule_file=rule_file,
+        workflow_validation_file=workflow_dir / "workflow_validation.json",
+        data_validation_file=data_rule_dir / "data_validation.json",
+        rule_validation_file=data_rule_dir / "rule_validation.json",
+        output_dir=consistency_dir,
+        workflow_ontology_file=workflow_ontology_file,
+        data_ontology_file=data_ontology_file,
+        rule_ontology_file=rule_ontology_file,
+        cross_shacl_file=consistency_dir / "consistency_shapes_generated.ttl",
+        expected_cross_shapes_hash=cross_shapes_hash,
+        progress=progress,
+    )
+    result["consistency_result"] = final_consistency
+    if has_pending or final_consistency.get("final_status") != "completed":
+        result["final_status"] = (
+            FinalizationStatus.UNRESOLVED_AFTER_HUMAN_REVIEW.value
+        )
+        result["unresolved_reason"] = (
+            "Human Review decisions remain pending or Cross Consistency still "
+            "reports violations."
+        )
+    elif not result["individual_checks_passed"]:
+        result["final_status"] = (
+            FinalizationStatus.INDIVIDUAL_VALIDATION_FAILED.value
+        )
+        result["unresolved_reason"] = (
+            "A Human Review targeted revision retained individual SHACL or "
+            "Self-Review issues."
+        )
+    else:
+        result["final_status"] = (
+            FinalizationStatus.COMPLETED_AFTER_HUMAN_REVISION.value
+        )
+        result["unresolved_reason"] = None
+    write_json(history_file, result)
+    return result
+
+
+def _save_final_artifacts(
+    *,
+    root: Path,
+    scenario_file: Path | str,
+    workflow_dir: Path,
+    data_rule_dir: Path,
+    consistency_result: dict[str, Any],
+    consistency_revision_history: dict[str, Any],
+    final_status: FinalizationStatus,
+    e2e_status: RunStatus,
+    individual_rdf_issues: dict[str, IndividualRdfIssueSummary],
+    human_review_revision: dict[str, Any],
+    unresolved_reason: str | None,
+    progress: ProgressReporter | None,
+) -> FinalArtifactSummary:
+    """Snapshot the last accepted RDF files and their existing validation states."""
+
+    final_dir = root / "final"
+    source_files = {
+        "scenario": Path(scenario_file),
+        "workflow": workflow_dir / "workflow_final.ttl",
+        "data": data_rule_dir / "data_final.ttl",
+        "rule": data_rule_dir / "rule_final.ttl",
+    }
+    destination_files = {
+        name: final_dir / f"{name}_final.ttl" for name in source_files
+    }
+    turtles: dict[str, str] = {}
+    for name, source in source_files.items():
+        if not source.is_file():
+            raise FileNotFoundError(f"Required final {name} RDF was not found: {source}")
+        turtle = source.read_text(encoding="utf-8")
+        if not turtle.strip():
+            raise ValueError(f"Required final {name} RDF is empty: {source}")
+        turtles[name] = turtle
+        write_text(destination_files[name], turtle)
+
+    validations = {
+        "workflow": _load_json_object(
+            workflow_dir / "workflow_validation.json", "Workflow validation"
+        ),
+        "data": _load_json_object(
+            data_rule_dir / "data_validation.json", "Data validation"
+        ),
+        "rule": _load_json_object(
+            data_rule_dir / "rule_validation.json", "Rule validation"
+        ),
+    }
+    self_reviews = {
+        "workflow": _load_json_object(
+            workflow_dir / "workflow_self_review.json", "Workflow Self-Review"
+        ),
+        "data": _load_json_object(
+            data_rule_dir / "data_self_review.json", "Data Self-Review"
+        ),
+        "rule": _load_json_object(
+            data_rule_dir / "rule_self_review.json", "Rule Self-Review"
+        ),
+    }
+    revision_counts = {
+        "workflow": _history_length(
+            workflow_dir / "workflow_revision_history.json"
+        ),
+        "data": _history_length(data_rule_dir / "data_revision_history.json"),
+        "rule": _history_length(data_rule_dir / "rule_revision_history.json"),
+        "cross": int(consistency_revision_history.get("revision_rounds", 0)),
+        "human_review_targets": len(
+            human_review_revision.get("revision_results", [])
+        ),
+    }
+    final_summary = FinalArtifactSummary(
+        final_status=final_status,
+        e2e_status=e2e_status,
+        final_rdf_files={
+            name: str(path) for name, path in destination_files.items()
+        },
+        shacl_conforms={
+            name: payload.get("conforms") is True
+            for name, payload in validations.items()
+        },
+        self_review_status={
+            name: str(payload.get("status", "unknown"))
+            for name, payload in self_reviews.items()
+        },
+        cross_consistency_status=str(
+            consistency_result.get("final_status", "unknown")
+        ),
+        human_review_performed=True,
+        human_review_revision_performed=bool(
+            human_review_revision.get("revision_performed")
+        ),
+        revision_count=sum(
+            revision_counts[name] for name in ("workflow", "data", "rule")
+        ),
+        revision_counts=revision_counts,
+        final_rdf_hashes={
+            name: content_hash(turtle) for name, turtle in turtles.items()
+        },
+        individual_rdf_issues=individual_rdf_issues,
+        unresolved_reason=unresolved_reason,
+    )
+    write_json(
+        final_dir / "final_summary.json",
+        final_summary.model_dump(mode="json"),
+    )
+    report_progress(
+        progress,
+        phase="finalization",
+        step="final_artifacts",
+        status=ProgressStatus.COMPLETED,
+        message="Final artifacts saved",
+    )
+    return final_summary
 
 
 def _rdf_hashes(
@@ -392,7 +965,6 @@ def run_consistency_revision_loop(
             revision_results.append(result)
             if result.get("final_status") != "completed":
                 revision_failed = True
-                break
         record["revision_results"] = revision_results
         record["rdf_hashes_after_revision"] = _rdf_hashes(
             workflow_file,
@@ -407,10 +979,11 @@ def run_consistency_revision_loop(
                 phase="consistency",
                 step="targeted_revision",
                 status=ProgressStatus.WARNING,
-                message="Targeted RDF did not pass individual checks",
+                message=(
+                    "Targeted RDF did not pass individual checks; "
+                    "continuing with the usable RDF"
+                ),
             )
-            history["status"] = "individual_revision_failed"
-            break
 
         revision_round += 1
         consistency_iteration += 1
@@ -457,7 +1030,7 @@ def run_end_to_end_controller(
     reviewer: str | None = None,
     progress: ProgressReporter | None = None,
 ) -> ControllerRunSummary:
-    """Run Scenario through Human Review in sequence."""
+    """Run Scenario through Human Review revision and finalization in sequence."""
 
     root = Path(output_dir)
     scenario_dir = root / "scenario"
@@ -508,6 +1081,17 @@ def run_end_to_end_controller(
             progress=progress_reporter,
         )
     scenario_file = scenario_result["scenario_file"]
+    try:
+        _require_parseable_turtle(scenario_file, "Scenario RDF")
+    except Exception as error:
+        return _finish_failed_run(
+            summary,
+            summary_path,
+            ControllerStage.SCENARIO,
+            type(error).__name__,
+            str(error),
+            progress=progress_reporter,
+        )
     scenario_stage.status = ControllerStageStatus.COMPLETED
     scenario_stage.pipeline_status = scenario_result["final_status"]
     scenario_stage.output_files = {"scenario_rdf": scenario_file}
@@ -552,24 +1136,46 @@ def run_end_to_end_controller(
         "workflow_self_review": str(workflow_dir / "workflow_self_review.json"),
     }
     summary.output_files.update(workflow_stage.output_files)
-    if workflow_result["final_status"] != "completed":
+    try:
+        workflow_issue = _collect_rdf_issue_summary(
+            rdf_kind=RdfKind.WORKFLOW,
+            rdf_file=workflow_dir / "workflow_final.ttl",
+            shapes_file=workflow_dir / "workflow_shapes_generated.ttl",
+            validation_file=workflow_dir / "workflow_validation.json",
+            self_review_file=workflow_dir / "workflow_self_review.json",
+            revision_history_file=workflow_dir / "workflow_revision_history.json",
+        )
+    except Exception as error:
         return _finish_failed_run(
             summary,
             summary_path,
             ControllerStage.WORKFLOW,
-            "ValidationNotConforming",
-            "Workflow RDF did not pass individual validation.",
-            ControllerStageStatus.NEEDS_REVIEW,
+            type(error).__name__,
+            str(error),
             progress=progress_reporter,
         )
-    workflow_stage.status = ControllerStageStatus.COMPLETED
-    report_progress(
-        progress_reporter,
-        phase="workflow",
-        step="phase",
-        status=ProgressStatus.COMPLETED,
-        message="Workflow completed",
+    summary.individual_rdf_issues[RdfKind.WORKFLOW.value] = workflow_issue
+    workflow_stage.unresolved_shacl_violation_count = (
+        workflow_issue.shacl_violation_count
     )
+    workflow_stage.unresolved_self_review_finding_count = (
+        workflow_issue.self_review_finding_count
+    )
+    if workflow_issue.has_issues:
+        workflow_stage.status = ControllerStageStatus.COMPLETED_WITH_ISSUES
+        workflow_stage.warnings.append(
+            "Workflow RDF retained unresolved individual validation issues."
+        )
+        _report_rdf_issues(workflow_issue, progress_reporter)
+    else:
+        workflow_stage.status = ControllerStageStatus.COMPLETED
+        report_progress(
+            progress_reporter,
+            phase="workflow",
+            step="phase",
+            status=ProgressStatus.COMPLETED,
+            message="Workflow completed",
+        )
     _save_controller_summary(summary, summary_path)
 
     data_rule_stage = _stage_result(summary, ControllerStage.DATA_RULE)
@@ -606,17 +1212,53 @@ def run_end_to_end_controller(
         "rule_self_review": str(data_rule_dir / "rule_self_review.json"),
     }
     summary.output_files.update(data_rule_stage.output_files)
-    if data_rule_result["final_status"] != "completed":
+    try:
+        data_issue = _collect_rdf_issue_summary(
+            rdf_kind=RdfKind.DATA,
+            rdf_file=data_rule_dir / "data_final.ttl",
+            shapes_file=data_rule_dir / "data_shapes_generated.ttl",
+            validation_file=data_rule_dir / "data_validation.json",
+            self_review_file=data_rule_dir / "data_self_review.json",
+            revision_history_file=data_rule_dir / "data_revision_history.json",
+        )
+        rule_issue = _collect_rdf_issue_summary(
+            rdf_kind=RdfKind.RULE,
+            rdf_file=data_rule_dir / "rule_final.ttl",
+            shapes_file=data_rule_dir / "rule_shapes_generated.ttl",
+            validation_file=data_rule_dir / "rule_validation.json",
+            self_review_file=data_rule_dir / "rule_self_review.json",
+            revision_history_file=data_rule_dir / "rule_revision_history.json",
+        )
+    except Exception as error:
         return _finish_failed_run(
             summary,
             summary_path,
             ControllerStage.DATA_RULE,
-            "ValidationNotConforming",
-            "Data RDF or Rule RDF did not pass individual validation.",
-            ControllerStageStatus.NEEDS_REVIEW,
+            type(error).__name__,
+            str(error),
             progress=progress_reporter,
         )
-    data_rule_stage.status = ControllerStageStatus.COMPLETED
+    summary.individual_rdf_issues.update(
+        {
+            RdfKind.DATA.value: data_issue,
+            RdfKind.RULE.value: rule_issue,
+        }
+    )
+    data_rule_stage.unresolved_shacl_violation_count = sum(
+        issue.shacl_violation_count for issue in (data_issue, rule_issue)
+    )
+    data_rule_stage.unresolved_self_review_finding_count = sum(
+        issue.self_review_finding_count for issue in (data_issue, rule_issue)
+    )
+    if data_issue.has_issues or rule_issue.has_issues:
+        data_rule_stage.status = ControllerStageStatus.COMPLETED_WITH_ISSUES
+        data_rule_stage.warnings.append(
+            "Data RDF or Rule RDF retained unresolved individual issues."
+        )
+        _report_rdf_issues(data_issue, progress_reporter)
+        _report_rdf_issues(rule_issue, progress_reporter)
+    else:
+        data_rule_stage.status = ControllerStageStatus.COMPLETED
     _save_controller_summary(summary, summary_path)
 
     consistency_stage = _stage_result(summary, ControllerStage.CONSISTENCY)
@@ -672,17 +1314,56 @@ def run_end_to_end_controller(
     consistency_stage.status = (
         ControllerStageStatus.COMPLETED
         if consistency_status == "completed"
-        else ControllerStageStatus.NEEDS_REVIEW
+        else ControllerStageStatus.COMPLETED_WITH_ISSUES
     )
-    consistency_stage.error_message = (
-        None
-        if consistency_status == "completed"
-        else f"Consistency revision loop ended: {consistency_history['status']}"
+    if consistency_status != "completed":
+        consistency_stage.warnings.append(
+            f"Consistency revision loop ended: {consistency_history['status']}"
+        )
+        report_progress(
+            progress_reporter,
+            phase="consistency",
+            step="phase",
+            status=ProgressStatus.WARNING,
+            message="Cross Consistency completed with unresolved findings",
+        )
+        report_progress(
+            progress_reporter,
+            phase="consistency",
+            step="continue",
+            status=ProgressStatus.RUNNING,
+            message="Continuing to Human Review",
+        )
+    evaluation = consistency_result.get("evaluation")
+    cross_violations = (
+        evaluation.get("violations", []) if isinstance(evaluation, dict) else []
+    )
+    summary.cross_consistency_finding_count = (
+        len(cross_violations) if isinstance(cross_violations, list) else 0
+    )
+    try:
+        summary.individual_rdf_issues = _collect_all_rdf_issues(
+            workflow_dir,
+            data_rule_dir,
+        )
+    except Exception as error:
+        return _finish_failed_run(
+            summary,
+            summary_path,
+            ControllerStage.CONSISTENCY,
+            type(error).__name__,
+            str(error),
+            progress=progress_reporter,
+        )
+    _sync_individual_stage_states(summary)
+    summary.human_review_required = (
+        consistency_status != "completed"
+        or any(issue.has_issues for issue in summary.individual_rdf_issues.values())
     )
     _save_controller_summary(summary, summary_path)
 
     human_review_stage = _stage_result(summary, ControllerStage.HUMAN_REVIEW)
-    progress_reporter.phase(6, 6, "Finalization / Human Review", "finalization")
+    progress_reporter.phase(6, 6, "Human Review / Finalization", "finalization")
     human_review_file = root / "human_review" / "human_review.json"
     report_progress(
         progress_reporter,
@@ -701,6 +1382,7 @@ def run_end_to_end_controller(
             ),
             output_file=human_review_file,
             reviewer=reviewer,
+            individual_rdf_issues=summary.individual_rdf_issues,
         )
     except Exception as error:
         return _finish_failed_run(
@@ -715,10 +1397,132 @@ def run_end_to_end_controller(
     human_review_stage.pipeline_status = human_review.status.value
     human_review_stage.output_files = {
         "human_review": str(human_review_file),
+        "human_review_revision": str(
+            root / "human_review" / "human_review_revision.json"
+        ),
     }
     summary.output_files.update(human_review_stage.output_files)
-    summary.status = RunStatus.COMPLETED
+    report_progress(
+        progress_reporter,
+        phase="finalization",
+        step="human_review",
+        status=ProgressStatus.PASSED,
+        message="Human Review completed",
+    )
+
+    try:
+        human_revision = run_human_review_revision(
+            human_review=human_review,
+            consistency_result=consistency_result,
+            consistency_iteration=int(
+                consistency_history.get("revision_rounds", 0)
+            )
+            + 1,
+            model=model,
+            pdf_file=pdf_file,
+            scenario_file=scenario_file,
+            workflow_dir=workflow_dir,
+            data_rule_dir=data_rule_dir,
+            consistency_dir=consistency_dir,
+            human_review_dir=root / "human_review",
+            workflow_ontology_file=workflow_ontology_file,
+            data_ontology_file=data_ontology_file,
+            rule_ontology_file=rule_ontology_file,
+            progress=progress_reporter,
+        )
+        final_consistency = human_revision["consistency_result"]
+        if not isinstance(final_consistency, dict):
+            raise ValueError("Human Review revision returned invalid Consistency data.")
+
+        final_cross_status = str(final_consistency.get("final_status", "unknown"))
+        final_status = FinalizationStatus(str(human_revision["final_status"]))
+        unresolved_reason = human_revision.get("unresolved_reason")
+
+        consistency_stage.pipeline_status = final_cross_status
+        consistency_stage.status = (
+            ControllerStageStatus.COMPLETED
+            if final_cross_status == "completed"
+            else ControllerStageStatus.COMPLETED_WITH_ISSUES
+        )
+        if final_cross_status != "completed":
+            consistency_stage.warnings.append(
+                "Cross Consistency remains unresolved after Human Review."
+            )
+        final_evaluation = final_consistency.get("evaluation")
+        final_cross_violations = (
+            final_evaluation.get("violations", [])
+            if isinstance(final_evaluation, dict)
+            else []
+        )
+        summary.cross_consistency_finding_count = (
+            len(final_cross_violations)
+            if isinstance(final_cross_violations, list)
+            else 0
+        )
+        summary.individual_rdf_issues = _collect_all_rdf_issues(
+            workflow_dir,
+            data_rule_dir,
+        )
+        _sync_individual_stage_states(summary)
+        has_final_issues = (
+            final_cross_status != "completed"
+            or any(
+                issue.has_issues
+                for issue in summary.individual_rdf_issues.values()
+            )
+            or final_status
+            in {
+                FinalizationStatus.UNRESOLVED_AFTER_HUMAN_REVIEW,
+                FinalizationStatus.INDIVIDUAL_VALIDATION_FAILED,
+            }
+        )
+        e2e_status = (
+            RunStatus.COMPLETED_WITH_ISSUES
+            if has_final_issues
+            else RunStatus.COMPLETED
+        )
+        final_summary = _save_final_artifacts(
+            root=root,
+            scenario_file=scenario_file,
+            workflow_dir=workflow_dir,
+            data_rule_dir=data_rule_dir,
+            consistency_result=final_consistency,
+            consistency_revision_history=consistency_history,
+            final_status=final_status,
+            e2e_status=e2e_status,
+            individual_rdf_issues=summary.individual_rdf_issues,
+            human_review_revision=human_revision,
+            unresolved_reason=unresolved_reason,
+            progress=progress_reporter,
+        )
+    except Exception as error:
+        return _finish_failed_run(
+            summary,
+            summary_path,
+            ControllerStage.HUMAN_REVIEW,
+            type(error).__name__,
+            str(error),
+            progress=progress_reporter,
+        )
+
+    summary.final_status = final_summary.final_status
+    summary.output_files.update(
+        {
+            f"final_{name}_rdf": path
+            for name, path in final_summary.final_rdf_files.items()
+        }
+    )
+    summary.output_files["final_summary"] = str(
+        root / "final" / "final_summary.json"
+    )
+    summary.status = final_summary.e2e_status
     summary.completed = True
+    summary.fatal_error = False
+    human_review_stage.status = (
+        ControllerStageStatus.COMPLETED_WITH_ISSUES
+        if summary.status is RunStatus.COMPLETED_WITH_ISSUES
+        else ControllerStageStatus.COMPLETED
+    )
     summary.finished_at = datetime.now().astimezone()
     _save_controller_summary(summary, summary_path)
     report_progress(
@@ -936,7 +1740,10 @@ def run(argv: Sequence[str] | None = None) -> int:
             return 1
         print("End-to-End実行を終了しました")
         print(f"実行サマリー: {summary.output_files['run_summary']}")
-        if summary.status is RunStatus.COMPLETED:
+        if summary.status in {
+            RunStatus.COMPLETED,
+            RunStatus.COMPLETED_WITH_ISSUES,
+        }:
             consistency_status = _stage_result(
                 summary,
                 ControllerStage.CONSISTENCY,
@@ -947,6 +1754,11 @@ def run(argv: Sequence[str] | None = None) -> int:
                 ControllerStage.HUMAN_REVIEW,
             ).pipeline_status
             print(f"Human Review: {human_review_status}")
+            print(
+                "Final status: "
+                f"{summary.final_status.value if summary.final_status else 'unknown'}"
+            )
+            print(f"E2E status: {summary.status.value}")
             return 0
         print(f"失敗工程: {summary.failed_stage.value if summary.failed_stage else 'unknown'}")
         print(f"エラー: {summary.error_message}")

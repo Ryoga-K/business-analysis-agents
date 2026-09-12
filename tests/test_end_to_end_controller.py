@@ -6,20 +6,124 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from business_analysis_agents import controller
 from business_analysis_agents.config import MAX_REVISION_ITERATIONS
 from business_analysis_agents.models import (
+    AgentName,
+    ConsistencyViolationAnalysis,
     ControllerRunSummary,
     ControllerStage,
     ControllerStageResult,
     ControllerStageStatus,
+    HumanReviewDecision,
+    HumanReviewFindingResult,
     HumanReviewReport,
+    RdfKind,
     ReviewStatus,
     RunStatus,
+    ShaclViolation,
 )
 
 
-def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
+def _write_rdf_artifacts(
+    directory: Path,
+    rdf_kind: str,
+    *,
+    validation_conforms: bool = True,
+    self_review_status: str = "passed",
+    rdf_turtle: str | None = None,
+) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{rdf_kind}_final.ttl").write_text(
+        rdf_turtle or f"<urn:{rdf_kind}> <urn:p> <urn:o> .",
+        encoding="utf-8",
+    )
+    (directory / f"{rdf_kind}_shapes_generated.ttl").write_text(
+        "<urn:shape> <urn:p> <urn:o> .",
+        encoding="utf-8",
+    )
+    violations = (
+        []
+        if validation_conforms
+        else [{"focus_node": f"urn:{rdf_kind}", "message": "Unresolved"}]
+    )
+    (directory / f"{rdf_kind}_validation.json").write_text(
+        json.dumps(
+            {
+                "conforms": validation_conforms,
+                "shacl_conforms": validation_conforms,
+                "shacl_result": {"violations": violations},
+            }
+        ),
+        encoding="utf-8",
+    )
+    findings = (
+        []
+        if self_review_status == "passed"
+        else [{"description": f"Unresolved {rdf_kind} content"}]
+    )
+    (directory / f"{rdf_kind}_self_review.json").write_text(
+        json.dumps(
+            {
+                "status": self_review_status,
+                "final_result": {"findings": findings},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (directory / f"{rdf_kind}_revision_history.json").write_text(
+        "[]",
+        encoding="utf-8",
+    )
+
+
+def _human_review_with_rule_finding(
+    decision: HumanReviewDecision,
+    comment: str | None = None,
+) -> HumanReviewReport:
+    violation = ShaclViolation(
+        focus_node="urn:rule:payment",
+        path="urn:rule:usesData",
+        constraint_component="http://www.w3.org/ns/shacl#ClassConstraintComponent",
+        message="Referenced data has an incompatible type.",
+        rdf_kind=RdfKind.CONSISTENCY,
+    )
+    analysis = ConsistencyViolationAnalysis(
+        violation_index=0,
+        target_resource="urn:rule:payment",
+        cause="The referenced resource does not have the required data type.",
+        target_agent=AgentName.RULE,
+        repair_instruction="Use the documented Data RDF resource.",
+    )
+    finding = HumanReviewFindingResult(
+        finding_id="consistency-finding-0000",
+        consistency_violation_index=0,
+        target_resource=analysis.target_resource,
+        source_violation=violation,
+        source_analysis=analysis,
+        decision=decision,
+        supplemental_comment=comment,
+    )
+    return HumanReviewReport(
+        status=(
+            ReviewStatus.UNKNOWN
+            if decision is HumanReviewDecision.PENDING
+            else ReviewStatus.NEEDS_REVISION
+        ),
+        consistency_status=ReviewStatus.NEEDS_REVISION,
+        consistency_conforms=False,
+        workflow_rdf_file="workflow.ttl",
+        data_rdf_file="data.ttl",
+        rule_rdf_file="rule.ttl",
+        consistency_evaluation_file="consistency.json",
+        findings=[finding],
+        summary="Reviewed one finding.",
+    )
+
+
+def test_end_to_end_controller_completes_without_human_revision(
     monkeypatch,
     tmp_path,
     capsys,
@@ -48,6 +152,8 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
         assert kwargs["scenario_file"] == str(scenario_path)
         assert kwargs["pdf_file"] == pdf_path
         assert kwargs["output_dir"] == tmp_path / "workflow"
+        workflow_dir = kwargs["output_dir"]
+        _write_rdf_artifacts(workflow_dir, "workflow")
         return {"output_dir": str(kwargs["output_dir"]), "final_status": "completed"}
 
     def fake_data_rule(**kwargs):
@@ -55,6 +161,9 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
         assert kwargs["scenario_file"] == str(scenario_path)
         assert kwargs["pdf_file"] == pdf_path
         assert kwargs["output_dir"] == tmp_path / "data_rule"
+        data_rule_dir = kwargs["output_dir"]
+        for name in ("data", "rule"):
+            _write_rdf_artifacts(data_rule_dir, name)
         kwargs["progress"].phase(3, 6, "Data RDF", "data")
         kwargs["progress"].phase(4, 6, "Rule RDF", "rule")
         return {"output_dir": str(kwargs["output_dir"]), "final_status": "completed"}
@@ -67,9 +176,9 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
         return (
             {
                 "output_dir": str(kwargs["consistency_dir"]),
-                "final_status": "needs_revision",
+                "final_status": "completed",
             },
-            {"status": "max_iterations"},
+            {"status": "completed", "revision_rounds": 0},
         )
 
     def fake_human_review(**kwargs):
@@ -81,14 +190,14 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
             tmp_path / "human_review" / "human_review.json"
         )
         return HumanReviewReport(
-            status=ReviewStatus.NEEDS_REVISION,
-            consistency_status=ReviewStatus.NEEDS_REVISION,
-            consistency_conforms=False,
+            status=ReviewStatus.APPROVED,
+            consistency_status=ReviewStatus.APPROVED,
+            consistency_conforms=True,
             workflow_rdf_file=str(kwargs["workflow_file"]),
             data_rdf_file=str(kwargs["data_file"]),
             rule_rdf_file=str(kwargs["rule_file"]),
             consistency_evaluation_file=str(kwargs["consistency_evaluation_file"]),
-            summary="Reviewed one finding.",
+            summary="確認事項なし",
         )
 
     monkeypatch.setattr(controller, "run_scenario_pipeline", fake_scenario)
@@ -117,7 +226,7 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
         ControllerStageStatus.COMPLETED,
         ControllerStageStatus.COMPLETED,
         ControllerStageStatus.COMPLETED,
-        ControllerStageStatus.NEEDS_REVIEW,
+        ControllerStageStatus.COMPLETED,
         ControllerStageStatus.COMPLETED,
     ]
     saved = json.loads(
@@ -125,10 +234,18 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
     )
     assert saved["status"] == "completed"
     assert saved["completed"] is True
-    assert saved["stages"][3]["pipeline_status"] == "needs_revision"
-    assert saved["stages"][4]["pipeline_status"] == "needs_revision"
+    assert saved["stages"][3]["pipeline_status"] == "completed"
+    assert saved["stages"][4]["pipeline_status"] == "approved"
+    assert saved["final_status"] == "completed_without_human_revision"
     assert "consistency_evaluation" in saved["output_files"]
     assert "human_review" in saved["output_files"]
+    assert "final_summary" in saved["output_files"]
+    assert "final_workflow_rdf" in saved["output_files"]
+    final_summary = json.loads(
+        (tmp_path / "final" / "final_summary.json").read_text(encoding="utf-8")
+    )
+    assert final_summary["final_status"] == "completed_without_human_revision"
+    assert final_summary["human_review_revision_performed"] is False
     progress_output = capsys.readouterr().out
     for index, name in enumerate(
         (
@@ -137,7 +254,7 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
             "Data RDF",
             "Rule RDF",
             "Cross Consistency",
-            "Finalization / Human Review",
+            "Human Review / Finalization",
         ),
         start=1,
     ):
@@ -145,10 +262,269 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
     assert (tmp_path / "controller" / "progress.jsonl").exists()
 
 
+@pytest.mark.parametrize("issue_kind", ["workflow", "data", "cross"])
+def test_end_to_end_controller_continues_with_quality_issues(
+    monkeypatch,
+    tmp_path,
+    issue_kind,
+    capsys,
+) -> None:
+    """Individual and Cross quality issues still reach finalization."""
+
+    calls: list[str] = []
+    scenario_path = tmp_path / "scenario" / "scenario_final.ttl"
+
+    def fake_scenario(**kwargs):
+        scenario_path.parent.mkdir(parents=True)
+        scenario_path.write_text("<urn:s> <urn:p> <urn:o> .", encoding="utf-8")
+        return {"final_status": "completed", "scenario_file": str(scenario_path)}
+
+    def fake_workflow(**kwargs):
+        calls.append("workflow")
+        _write_rdf_artifacts(
+            kwargs["output_dir"],
+            "workflow",
+            self_review_status=(
+                "max_iterations" if issue_kind == "workflow" else "passed"
+            ),
+        )
+        return {
+            "final_status": (
+                "needs_review" if issue_kind == "workflow" else "completed"
+            )
+        }
+
+    def fake_data_rule(**kwargs):
+        calls.append("data_rule")
+        _write_rdf_artifacts(
+            kwargs["output_dir"],
+            "data",
+            self_review_status=(
+                "max_iterations" if issue_kind == "data" else "passed"
+            ),
+        )
+        _write_rdf_artifacts(kwargs["output_dir"], "rule")
+        return {
+            "final_status": "needs_review" if issue_kind == "data" else "completed"
+        }
+
+    def fake_consistency(**kwargs):
+        calls.append("consistency")
+        if issue_kind == "cross":
+            return (
+                {
+                    "final_status": "needs_revision",
+                    "evaluation": {"violations": [{"message": "Unresolved Cross"}]},
+                },
+                {"status": "max_iterations", "revision_rounds": 3},
+            )
+        return (
+            {"final_status": "completed", "evaluation": {"violations": []}},
+            {"status": "completed", "revision_rounds": 0},
+        )
+
+    def fake_human_review(**kwargs):
+        calls.append("human_review")
+        issues = kwargs["individual_rdf_issues"]
+        if issue_kind == "cross":
+            report = _human_review_with_rule_finding(
+                HumanReviewDecision.APPROVE_CURRENT_RDF
+            ).model_copy(
+                update={
+                    "status": ReviewStatus.APPROVED,
+                    "workflow_rdf_file": str(kwargs["workflow_file"]),
+                    "data_rdf_file": str(kwargs["data_file"]),
+                    "rule_rdf_file": str(kwargs["rule_file"]),
+                    "consistency_evaluation_file": str(
+                        kwargs["consistency_evaluation_file"]
+                    ),
+                    "individual_rdf_issues": issues,
+                }
+            )
+        else:
+            assert issues[issue_kind].self_review_finding_count == 1
+            report = HumanReviewReport(
+                status=ReviewStatus.APPROVED,
+                consistency_status=ReviewStatus.APPROVED,
+                consistency_conforms=True,
+                workflow_rdf_file=str(kwargs["workflow_file"]),
+                data_rdf_file=str(kwargs["data_file"]),
+                rule_rdf_file=str(kwargs["rule_file"]),
+                consistency_evaluation_file=str(
+                    kwargs["consistency_evaluation_file"]
+                ),
+                individual_rdf_issues=issues,
+                summary="Individual issues are available for review.",
+            )
+        Path(kwargs["output_file"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(kwargs["output_file"]).write_text(
+            report.model_dump_json(), encoding="utf-8"
+        )
+        return report
+
+    monkeypatch.setattr(controller, "run_scenario_pipeline", fake_scenario)
+    monkeypatch.setattr(controller, "run_workflow_pipeline", fake_workflow)
+    monkeypatch.setattr(controller, "run_data_rule_pipeline", fake_data_rule)
+    monkeypatch.setattr(controller, "run_consistency_revision_loop", fake_consistency)
+    monkeypatch.setattr(controller, "run_human_review", fake_human_review)
+
+    summary = controller.run_end_to_end_controller(
+        pdf_file=tmp_path / "manual.pdf",
+        model="test-model",
+        output_dir=tmp_path,
+    )
+
+    assert calls == ["workflow", "data_rule", "consistency", "human_review"]
+    assert summary.status is RunStatus.COMPLETED_WITH_ISSUES
+    assert summary.completed is True
+    assert summary.fatal_error is False
+    assert summary.human_review_required is True
+    if issue_kind == "cross":
+        assert summary.cross_consistency_finding_count == 1
+    else:
+        assert summary.individual_rdf_issues[
+            issue_kind
+        ].self_review_finding_count == 1
+    saved_review = json.loads(
+        (tmp_path / "human_review" / "human_review.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if issue_kind != "cross":
+        assert saved_review["individual_rdf_issues"][issue_kind][
+            "self_review_finding_count"
+        ] == 1
+    saved_summary = json.loads(
+        (tmp_path / "controller" / "run_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert saved_summary["status"] == "completed_with_issues"
+    assert saved_summary["fatal_error"] is False
+    assert saved_summary["human_review_required"] is True
+    progress_output = capsys.readouterr().out
+    if issue_kind in {"workflow", "data"}:
+        assert f"{issue_kind.title()} completed with issues" in progress_output
+        assert "Continuing to next phase" in progress_output
+    else:
+        assert "Cross Consistency completed with unresolved findings" in progress_output
+        assert "Continuing to Human Review" in progress_output
+
+
+def _run_human_review_revision(
+    monkeypatch,
+    tmp_path,
+    *,
+    targeted_status: str,
+    cross_status: str,
+    decision: HumanReviewDecision = HumanReviewDecision.APPROVE_FINDING,
+    comment: str | None = None,
+) -> tuple[dict, list[str]]:
+    calls: list[str] = []
+
+    def fake_targeted(**kwargs):
+        calls.append("targeted")
+        assert kwargs["target_agent"] is AgentName.RULE
+        bundle = kwargs["repair_bundle"]
+        assert bundle["source"] == "human_review"
+        assert bundle["items"][0]["human_decision"] == decision.value
+        assert bundle["items"][0]["human_response"] == comment
+        return {"target_agent": "rule", "final_status": targeted_status}
+
+    def fake_consistency(**kwargs):
+        calls.append("consistency")
+        assert kwargs["cross_shacl_file"] == (
+            tmp_path / "consistency" / "consistency_shapes_generated.ttl"
+        )
+        assert kwargs["expected_cross_shapes_hash"] == "fixed-cross-hash"
+        return {
+            "final_status": cross_status,
+            "cross_shapes_hash": "fixed-cross-hash",
+        }
+
+    monkeypatch.setattr(controller, "run_targeted_rdf_revision", fake_targeted)
+    monkeypatch.setattr(controller, "run_consistency_pipeline", fake_consistency)
+    result = controller.run_human_review_revision(
+        human_review=_human_review_with_rule_finding(decision, comment),
+        consistency_result={
+            "final_status": "needs_revision",
+            "cross_shapes_hash": "fixed-cross-hash",
+        },
+        consistency_iteration=4,
+        model="test-model",
+        pdf_file=tmp_path / "manual.pdf",
+        scenario_file=tmp_path / "scenario.ttl",
+        workflow_dir=tmp_path / "workflow",
+        data_rule_dir=tmp_path / "data_rule",
+        consistency_dir=tmp_path / "consistency",
+        human_review_dir=tmp_path / "human_review",
+        workflow_ontology_file=tmp_path / "workflow-ontology.ttl",
+        data_ontology_file=tmp_path / "data-ontology.ttl",
+        rule_ontology_file=tmp_path / "rule-ontology.ttl",
+    )
+    return result, calls
+
+
+def test_human_review_revision_revalidates_and_completes(monkeypatch, tmp_path) -> None:
+    """Human context drives one targeted revision and fixed Cross re-validation."""
+
+    result, calls = _run_human_review_revision(
+        monkeypatch,
+        tmp_path,
+        targeted_status="completed",
+        cross_status="completed",
+        decision=HumanReviewDecision.PROVIDE_CONTEXT,
+        comment="Use urn:data:payment.",
+    )
+
+    assert calls == ["targeted", "consistency"]
+    assert result["revision_performed"] is True
+    assert result["final_status"] == "completed_after_human_revision"
+
+
+def test_human_review_revision_records_remaining_cross_violation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A valid targeted RDF can still end with Cross issues unresolved."""
+
+    result, calls = _run_human_review_revision(
+        monkeypatch,
+        tmp_path,
+        targeted_status="completed",
+        cross_status="needs_revision",
+    )
+
+    assert calls == ["targeted", "consistency"]
+    assert result["final_status"] == "unresolved_after_human_review"
+
+
+def test_human_review_revision_continues_after_individual_quality_issue(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A parseable targeted RDF reaches Cross validation despite quality issues."""
+
+    result, calls = _run_human_review_revision(
+        monkeypatch,
+        tmp_path,
+        targeted_status="needs_review",
+        cross_status="completed",
+    )
+
+    assert calls == ["targeted", "consistency"]
+    assert result["individual_checks_passed"] is False
+    assert result["final_status"] == (
+        "individual_validation_failed_after_human_review"
+    )
+
+
 def test_end_to_end_controller_stops_after_stage_exception(monkeypatch, tmp_path) -> None:
     """A failed stage is recorded and all later stages remain unexecuted."""
 
     scenario_path = tmp_path / "scenario" / "scenario_final.ttl"
+    scenario_path.parent.mkdir(parents=True)
+    scenario_path.write_text("<urn:s> <urn:p> <urn:o> .", encoding="utf-8")
 
     monkeypatch.setattr(
         controller,
@@ -178,13 +554,13 @@ def test_end_to_end_controller_stops_after_stage_exception(monkeypatch, tmp_path
         output_dir=tmp_path,
     )
 
-    assert summary.status is RunStatus.FAILED
+    assert summary.status is RunStatus.FATAL_FAILED
     assert summary.completed is False
     assert summary.failed_stage is ControllerStage.WORKFLOW
     assert summary.error_message == "workflow failed"
     assert [stage.status for stage in summary.stages] == [
         ControllerStageStatus.COMPLETED,
-        ControllerStageStatus.FAILED,
+        ControllerStageStatus.FATAL_FAILED,
         ControllerStageStatus.SKIPPED,
         ControllerStageStatus.SKIPPED,
         ControllerStageStatus.SKIPPED,
@@ -196,13 +572,17 @@ def test_end_to_end_controller_stops_after_stage_exception(monkeypatch, tmp_path
     assert saved["stages"][1]["error_type"] == "RuntimeError"
 
 
-def test_end_to_end_controller_stops_when_individual_validation_needs_review(
+@pytest.mark.parametrize("failure_mode", ["missing", "invalid_turtle"])
+def test_end_to_end_controller_stops_when_required_rdf_is_unusable(
     monkeypatch,
     tmp_path,
+    failure_mode,
 ) -> None:
-    """An unvalidated Workflow RDF is not passed to Data/Rule or Consistency."""
+    """Missing and non-parseable Workflow RDF artifacts are fatal."""
 
     scenario_path = tmp_path / "scenario" / "scenario_final.ttl"
+    scenario_path.parent.mkdir(parents=True)
+    scenario_path.write_text("<urn:s> <urn:p> <urn:o> .", encoding="utf-8")
     monkeypatch.setattr(
         controller,
         "run_scenario_pipeline",
@@ -213,14 +593,19 @@ def test_end_to_end_controller_stops_when_individual_validation_needs_review(
             "ontology_file": "scenario.ttl",
         },
     )
-    monkeypatch.setattr(
-        controller,
-        "run_workflow_pipeline",
-        lambda **kwargs: {
+    def fake_workflow(**kwargs):
+        if failure_mode == "invalid_turtle":
+            _write_rdf_artifacts(
+                kwargs["output_dir"],
+                "workflow",
+                rdf_turtle="this is not Turtle",
+            )
+        return {
             "output_dir": str(kwargs["output_dir"]),
             "final_status": "needs_review",
-        },
-    )
+        }
+
+    monkeypatch.setattr(controller, "run_workflow_pipeline", fake_workflow)
 
     def must_not_run(**kwargs):
         raise AssertionError("An unvalidated RDF was passed to a later pipeline")
@@ -238,9 +623,9 @@ def test_end_to_end_controller_stops_when_individual_validation_needs_review(
     workflow_stage = next(
         stage for stage in summary.stages if stage.stage is ControllerStage.WORKFLOW
     )
-    assert summary.status is RunStatus.FAILED
+    assert summary.status is RunStatus.FATAL_FAILED
     assert summary.failed_stage is ControllerStage.WORKFLOW
-    assert workflow_stage.status is ControllerStageStatus.NEEDS_REVIEW
+    assert workflow_stage.status is ControllerStageStatus.FATAL_FAILED
     assert workflow_stage.pipeline_status == "needs_review"
 
 
@@ -251,6 +636,8 @@ def test_end_to_end_controller_records_human_review_failure(
     """Only an actual Human Review processing error fails the final stage."""
 
     scenario_path = tmp_path / "scenario" / "scenario_final.ttl"
+    scenario_path.parent.mkdir(parents=True)
+    scenario_path.write_text("<urn:s> <urn:p> <urn:o> .", encoding="utf-8")
     monkeypatch.setattr(
         controller,
         "run_scenario_pipeline",
@@ -261,16 +648,17 @@ def test_end_to_end_controller_records_human_review_failure(
             "ontology_file": "scenario.ttl",
         },
     )
-    monkeypatch.setattr(
-        controller,
-        "run_workflow_pipeline",
-        lambda **kwargs: {"final_status": "completed"},
-    )
-    monkeypatch.setattr(
-        controller,
-        "run_data_rule_pipeline",
-        lambda **kwargs: {"final_status": "completed"},
-    )
+    def fake_workflow(**kwargs):
+        _write_rdf_artifacts(kwargs["output_dir"], "workflow")
+        return {"final_status": "completed"}
+
+    def fake_data_rule(**kwargs):
+        _write_rdf_artifacts(kwargs["output_dir"], "data")
+        _write_rdf_artifacts(kwargs["output_dir"], "rule")
+        return {"final_status": "completed"}
+
+    monkeypatch.setattr(controller, "run_workflow_pipeline", fake_workflow)
+    monkeypatch.setattr(controller, "run_data_rule_pipeline", fake_data_rule)
     monkeypatch.setattr(
         controller,
         "run_consistency_revision_loop",
@@ -291,10 +679,10 @@ def test_end_to_end_controller_records_human_review_failure(
         output_dir=tmp_path,
     )
 
-    assert summary.status is RunStatus.FAILED
+    assert summary.status is RunStatus.FATAL_FAILED
     assert summary.failed_stage is ControllerStage.HUMAN_REVIEW
-    assert summary.stages[3].status is ControllerStageStatus.NEEDS_REVIEW
-    assert summary.stages[4].status is ControllerStageStatus.FAILED
+    assert summary.stages[3].status is ControllerStageStatus.COMPLETED_WITH_ISSUES
+    assert summary.stages[4].status is ControllerStageStatus.FATAL_FAILED
     assert summary.stages[4].error_message == "invalid review input"
 
 
@@ -309,12 +697,12 @@ def test_run_subcommand_uses_fixed_revision_limit(
         input_pdf=str(tmp_path / "manual.pdf"),
         started_at=datetime.now().astimezone(),
         finished_at=datetime.now().astimezone(),
-        status=RunStatus.COMPLETED,
+        status=RunStatus.COMPLETED_WITH_ISSUES,
         completed=True,
         stages=[
             ControllerStageResult(
                 stage=ControllerStage.CONSISTENCY,
-                status=ControllerStageStatus.NEEDS_REVIEW,
+                status=ControllerStageStatus.COMPLETED_WITH_ISSUES,
                 pipeline_status="needs_revision",
             ),
             ControllerStageResult(

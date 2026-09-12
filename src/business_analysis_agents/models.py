@@ -87,6 +87,8 @@ class RunStatus(str, Enum):
     RUNNING = "running"
     WAITING_FOR_HUMAN = "waiting_for_human"
     COMPLETED = "completed"
+    COMPLETED_WITH_ISSUES = "completed_with_issues"
+    FATAL_FAILED = "fatal_failed"
     FAILED = "failed"
 
 
@@ -105,9 +107,21 @@ class ControllerStageStatus(str, Enum):
 
     PENDING = "pending"
     COMPLETED = "completed"
+    COMPLETED_WITH_ISSUES = "completed_with_issues"
     NEEDS_REVIEW = "needs_review"
+    FATAL_FAILED = "fatal_failed"
     FAILED = "failed"
     SKIPPED = "skipped"
+
+
+class FinalizationStatus(str, Enum):
+    """Human Review後を含むE2E最終成果物の確定状態。"""
+
+    COMPLETED_WITHOUT_HUMAN_REVISION = "completed_without_human_revision"
+    COMPLETED_AFTER_HUMAN_REVISION = "completed_after_human_revision"
+    UNRESOLVED_AFTER_HUMAN_REVIEW = "unresolved_after_human_review"
+    INDIVIDUAL_VALIDATION_FAILED = "individual_validation_failed_after_human_review"
+    PIPELINE_FAILED = "pipeline_failed"
 
 
 class ControllerStageResult(StrictBaseModel):
@@ -117,8 +131,38 @@ class ControllerStageResult(StrictBaseModel):
     status: ControllerStageStatus = ControllerStageStatus.PENDING
     pipeline_status: str | None = None
     output_files: dict[str, str] = Field(default_factory=dict)
+    unresolved_shacl_violation_count: int = Field(default=0, ge=0)
+    unresolved_self_review_finding_count: int = Field(default=0, ge=0)
+    warnings: list[str] = Field(default_factory=list)
     error_type: str | None = None
     error_message: str | None = None
+
+
+class IndividualRdfIssueSummary(StrictBaseModel):
+    """Unresolved individual validation details for one usable RDF."""
+
+    rdf_kind: RdfKind
+    rdf_file: str = Field(min_length=1)
+    usable: bool
+    validation_conforms: bool
+    shacl_conforms: bool
+    shacl_violation_count: int = Field(default=0, ge=0)
+    shacl_violations: list[dict[str, Any]] = Field(default_factory=list)
+    vocabulary_violation_count: int = Field(default=0, ge=0)
+    unauthorized_terms: list[str] = Field(default_factory=list)
+    self_review_status: str
+    self_review_finding_count: int = Field(default=0, ge=0)
+    self_review_findings: list[dict[str, Any]] = Field(default_factory=list)
+
+    @property
+    def has_issues(self) -> bool:
+        return (
+            not self.validation_conforms
+            or self.self_review_status != "passed"
+            or self.shacl_violation_count > 0
+            or self.self_review_finding_count > 0
+            or self.vocabulary_violation_count > 0
+        )
 
 
 class ControllerRunSummary(StrictBaseModel):
@@ -129,10 +173,37 @@ class ControllerRunSummary(StrictBaseModel):
     finished_at: datetime | None = None
     status: RunStatus = RunStatus.RUNNING
     completed: bool = False
+    final_status: FinalizationStatus | None = None
     failed_stage: ControllerStage | None = None
     error_message: str | None = None
+    fatal_error: bool = False
+    human_review_required: bool = False
+    cross_consistency_finding_count: int = Field(default=0, ge=0)
+    individual_rdf_issues: dict[str, IndividualRdfIssueSummary] = Field(
+        default_factory=dict
+    )
     stages: list[ControllerStageResult] = Field(default_factory=list)
     output_files: dict[str, str] = Field(default_factory=dict)
+
+
+class FinalArtifactSummary(StrictBaseModel):
+    """確定したRDFと最終検証状態の一覧。"""
+
+    final_status: FinalizationStatus
+    e2e_status: RunStatus
+    final_rdf_files: dict[str, str]
+    shacl_conforms: dict[str, bool]
+    self_review_status: dict[str, str]
+    cross_consistency_status: str
+    human_review_performed: bool
+    human_review_revision_performed: bool
+    revision_count: int = Field(ge=0)
+    revision_counts: dict[str, int] = Field(default_factory=dict)
+    final_rdf_hashes: dict[str, str]
+    individual_rdf_issues: dict[str, IndividualRdfIssueSummary] = Field(
+        default_factory=dict
+    )
+    unresolved_reason: str | None = None
 
 
 class WorkflowAgentMode(str, Enum):
@@ -690,6 +761,9 @@ class HumanReviewReport(StrictBaseModel):
     data_rdf_file: str = Field(min_length=1)
     rule_rdf_file: str = Field(min_length=1)
     consistency_evaluation_file: str = Field(min_length=1)
+    individual_rdf_issues: dict[str, IndividualRdfIssueSummary] = Field(
+        default_factory=dict
+    )
     groups: list[HumanReviewGroupResult] = Field(default_factory=list)
     findings: list[HumanReviewFindingResult] = Field(default_factory=list)
     summary: str = Field(min_length=1)

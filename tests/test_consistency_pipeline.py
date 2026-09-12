@@ -275,11 +275,11 @@ def test_consistency_pipeline_reuses_existing_cross_shacl(
     assert shapes_file.read_text(encoding="utf-8") == CROSS_SHAPES
 
 
-def test_consistency_pipeline_rejects_rdf_without_successful_individual_validation(
+def test_consistency_pipeline_accepts_usable_rdf_with_individual_issues(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Cross Review starts only after all three individual validations pass."""
+    """Individual quality issues do not block Cross Review for parseable RDF."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     paths = _write_inputs(tmp_path)
@@ -288,24 +288,34 @@ def test_consistency_pipeline_rejects_rdf_without_successful_individual_validati
         encoding="utf-8",
     )
 
-    def unexpected_runner(_agent, _prompt):
-        pytest.fail("Consistency Agent must not run for an unvalidated RDF")
+    calls = []
 
-    with pytest.raises(ValueError, match="Data RDF has not passed"):
-        run_consistency_pipeline(
-            model="gpt-test",
-            workflow_file=paths["workflow.ttl"],
-            data_file=paths["data.ttl"],
-            rule_file=paths["rule.ttl"],
-            workflow_validation_file=paths["workflow_validation.json"],
-            data_validation_file=paths["data_validation.json"],
-            rule_validation_file=paths["rule_validation.json"],
-            workflow_ontology_file=paths["workflow_ontology.ttl"],
-            data_ontology_file=paths["data_ontology.ttl"],
-            rule_ontology_file=paths["rule_ontology.ttl"],
-            output_dir=tmp_path / "consistency",
-            runner=unexpected_runner,
+    def fake_runner(_agent, prompt):
+        calls.append(prompt)
+        return SimpleNamespace(
+            final_output=ConsistencyAgentOutput(
+                mode=ConsistencyAgentMode.CROSS_SHACL_GENERATION,
+                cross_shacl_turtle=CROSS_SHAPES,
+            )
         )
+
+    result = run_consistency_pipeline(
+        model="gpt-test",
+        workflow_file=paths["workflow.ttl"],
+        data_file=paths["data.ttl"],
+        rule_file=paths["rule.ttl"],
+        workflow_validation_file=paths["workflow_validation.json"],
+        data_validation_file=paths["data_validation.json"],
+        rule_validation_file=paths["rule_validation.json"],
+        workflow_ontology_file=paths["workflow_ontology.ttl"],
+        data_ontology_file=paths["data_ontology.ttl"],
+        rule_ontology_file=paths["rule_ontology.ttl"],
+        output_dir=tmp_path / "consistency",
+        runner=fake_runner,
+    )
+
+    assert result["final_status"] == "completed"
+    assert len(calls) == 1
 
 
 def test_consistency_pipeline_analyzes_violation_without_rerunning_agents(

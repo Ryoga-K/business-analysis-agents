@@ -13,6 +13,7 @@ from business_analysis_agents.models import (
     ConsistencyViolationAnalysis,
     HumanReviewDecision,
     HumanReviewGroupDecision,
+    IndividualRdfIssueSummary,
     RdfKind,
     ReviewStatus,
     ShaclViolation,
@@ -77,6 +78,56 @@ def test_human_review_saves_no_findings_without_prompting(tmp_path) -> None:
     saved = json.loads(output_file.read_text(encoding="utf-8"))
     assert saved["summary"] == "確認事項なし"
     assert saved["consistency_conforms"] is True
+
+
+def test_human_review_displays_and_saves_individual_rdf_issues(tmp_path) -> None:
+    """Individual SHACL and Self-Review issues remain visible without Cross findings."""
+
+    workflow, data, rule = _write_rdf_inputs(tmp_path)
+    evaluation_file = _write_evaluation(
+        tmp_path,
+        ConsistencyEvaluationResult(
+            status=ReviewStatus.APPROVED,
+            conforms=True,
+            can_auto_repair=False,
+            reason="No cross-RDF violations.",
+        ),
+    )
+    issue = IndividualRdfIssueSummary(
+        rdf_kind=RdfKind.WORKFLOW,
+        rdf_file=str(workflow),
+        usable=True,
+        validation_conforms=False,
+        shacl_conforms=False,
+        shacl_violation_count=1,
+        shacl_violations=[{"message": "Missing actor"}],
+        self_review_status="max_iterations",
+        self_review_finding_count=1,
+        self_review_findings=[{"description": "A workflow step is missing"}],
+    )
+    messages: list[str] = []
+    output_file = tmp_path / "human_review.json"
+
+    report = run_human_review(
+        workflow_file=workflow,
+        data_file=data,
+        rule_file=rule,
+        consistency_evaluation_file=evaluation_file,
+        output_file=output_file,
+        individual_rdf_issues={"workflow": issue},
+        input_func=lambda prompt: pytest.fail(f"Unexpected prompt: {prompt}"),
+        output_func=messages.append,
+    )
+
+    rendered = "\n".join(messages)
+    assert "[Individual RDF issues]" in rendered
+    assert "Missing actor" in rendered
+    assert "A workflow step is missing" in rendered
+    assert report.individual_rdf_issues["workflow"].self_review_finding_count == 1
+    saved = json.loads(output_file.read_text(encoding="utf-8"))
+    assert saved["individual_rdf_issues"]["workflow"][
+        "shacl_violation_count"
+    ] == 1
 
 
 def test_human_review_collects_all_decisions_and_supplemental_context(tmp_path) -> None:

@@ -85,6 +85,8 @@ pySHACL結果、修正履歴を使って修正してください。ontology_turt
 Self-Review findingでもPDF本文またはScenario RDFに根拠が確認できない変更は行わないでください。
 入力にcross_consistency_revisionがある場合は、Data RDF向けに集約されたCross-SHACL違反、
 原因、修正指示をまとめて処理してください。related_rdfsは参照整合性の確認にだけ使用してください。
+入力にhuman_review_revisionがある場合は、人間の判断・補足回答と元のConsistency findingを
+修正根拠として使用してください。PDF、Scenario RDF、人間の回答のいずれにも根拠のない情報は追加しないでください。
 Cross違反の解消だけを目的としてPDF本文またはScenario RDFに根拠のないデータを追加しないでください。
 SHACL違反を解消するためにPDF本文に根拠のない情報を追加しないでください。根拠不足の情報は削除するか、
 必要に応じて未解決事項として残してください。
@@ -102,6 +104,7 @@ PDF本文、Scenario RDF、現在のData RDFを比較し、構文やSHACLでは�
 - PDFにもScenario RDFにも根拠のないデータや関係を追加していないか。
 - 同一データを不必要に重複抽出していないか。
 - PDFとScenario RDFの内容と矛盾していないか。
+- human_review_revisionがある場合は、人間の回答も根拠として評価すること。
 
 出力ルール:
 - self_review_resultを必須で出力し、Data RDFやSHACLは出力しないでください。
@@ -161,6 +164,8 @@ PDF本文、Scenario RDF、前回のRule RDF、検証済みData RDF、固定済�
 Self-Review findingでもPDF本文またはScenario RDFに根拠が確認できない変更は行わないでください。
 入力にcross_consistency_revisionがある場合は、Rule RDF向けに集約されたCross-SHACL違反、
 原因、修正指示をまとめて処理してください。related_rdfsは参照整合性の確認にだけ使用してください。
+入力にhuman_review_revisionがある場合は、人間の判断・補足回答と元のConsistency findingを
+修正根拠として使用してください。PDF、Scenario RDF、人間の回答のいずれにも根拠のない情報は追加しないでください。
 Cross違反の解消だけを目的としてPDF本文またはScenario RDFに根拠のないルールを追加しないでください。
 SHACL違反を解消するためにPDF本文に根拠のない業務ルールを追加しないでください。
 rule_rdf_turtleは必須です。
@@ -178,6 +183,7 @@ PDF本文、Scenario RDF、現在のRule RDFを比較し、構文やSHACLでは�
 - PDFにもScenario RDFにも存在しないルールを追加していないか。
 - Rule RDFからData RDFへの参照を誤っていないか。
 - 同一ルールを不必要に重複抽出していないか。
+- human_review_revisionがある場合は、人間の回答も根拠として評価すること。
 
 出力ルール:
 - self_review_resultを必須で出力し、Rule RDFやSHACLは出力しないでください。

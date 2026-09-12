@@ -15,6 +15,7 @@ from business_analysis_agents.models import (
     HumanReviewGroupDecision,
     HumanReviewGroupResult,
     HumanReviewReport,
+    IndividualRdfIssueSummary,
     ReviewStatus,
     ShaclViolation,
 )
@@ -300,6 +301,7 @@ def run_human_review(
     consistency_evaluation_file: Path | str = DEFAULT_CONSISTENCY_EVALUATION,
     output_file: Path | str = DEFAULT_HUMAN_REVIEW_OUTPUT,
     reviewer: str | None = None,
+    individual_rdf_issues: dict[str, IndividualRdfIssueSummary] | None = None,
     input_func: Callable[[str], str] | None = None,
     output_func: Callable[[str], None] | None = None,
 ) -> HumanReviewReport:
@@ -325,8 +327,28 @@ def run_human_review(
     )
     finding_pairs = _validated_finding_pairs(evaluation)
     grouped_findings = group_consistency_findings(finding_pairs)
+    rdf_issues = individual_rdf_issues or {}
     group_results: list[HumanReviewGroupResult] = []
     findings: list[HumanReviewFindingResult] = []
+
+    unresolved_rdf_issues = [
+        issue for issue in rdf_issues.values() if issue.has_issues
+    ]
+    if unresolved_rdf_issues:
+        write_output("")
+        write_output("[Individual RDF issues]")
+        for issue in unresolved_rdf_issues:
+            write_output(
+                f"{issue.rdf_kind.value}: SHACL {issue.shacl_violation_count}, "
+                f"Self-Review {issue.self_review_finding_count}, "
+                f"status={issue.self_review_status}"
+            )
+            for violation in issue.shacl_violations:
+                write_output(f"- SHACL: {violation.get('message', 'violation')}")
+            for finding in issue.self_review_findings:
+                write_output(
+                    f"- Self-Review: {finding.get('description', 'finding')}"
+                )
 
     if not grouped_findings:
         write_output("確認事項なし")
@@ -438,6 +460,7 @@ def run_human_review(
         data_rdf_file=str(data_path),
         rule_rdf_file=str(rule_path),
         consistency_evaluation_file=str(evaluation_path),
+        individual_rdf_issues=rdf_issues,
         groups=group_results,
         findings=findings,
         summary=summary,

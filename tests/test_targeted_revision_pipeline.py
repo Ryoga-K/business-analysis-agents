@@ -270,3 +270,77 @@ def test_targeted_revision_validates_and_self_reviews_each_rdf(
     assert history[0]["cross_consistency_revision"]["violation_indices"] == [0, 1]
     assert history[0]["validation"]["conforms"]
     assert self_review["status"] == "passed"
+
+
+def test_human_review_revision_uses_human_context_without_cross_payload(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Human Review context is preserved as its own revision evidence."""
+
+    paths = _write_inputs(tmp_path)
+    observed_payloads = []
+
+    def fake_data_rule(mode, payload, model, runner=None):
+        observed_payloads.append(payload)
+        assert "human_review_revision" in payload
+        assert "cross_consistency_revision" not in payload
+        if mode is DataRuleAgentMode.RULE_REVISION:
+            return DataRuleAgentOutput(mode=mode, rule_rdf_turtle=RULE_RDF)
+        return DataRuleAgentOutput(
+            mode=mode,
+            self_review_result=SelfReviewResult(
+                reviewer_agent=AgentName.RULE,
+                rdf_kind=RdfKind.RULE,
+                passed=True,
+                findings=[],
+                summary="The human clarification is reflected.",
+            ),
+        )
+
+    monkeypatch.setattr(pipeline, "run_data_rule_agent", fake_data_rule)
+    bundle = {
+        "source": "human_review",
+        "target_agent": "rule",
+        "violation_indices": [0],
+        "repair_instructions": ["Use the confirmed payment data resource."],
+        "items": [
+            {
+                "human_decision": "provide_context",
+                "human_response": "Use urn:data:payment.",
+            }
+        ],
+    }
+
+    result = pipeline.run_targeted_rdf_revision(
+        target_agent=AgentName.RULE,
+        repair_bundle=bundle,
+        consistency_iteration=1,
+        scenario_file=paths["scenario.ttl"],
+        pdf_file=paths["pdf"],
+        model="test-model",
+        workflow_file=paths["workflow.ttl"],
+        data_file=paths["data.ttl"],
+        rule_file=paths["rule.ttl"],
+        workflow_shapes_file=paths["workflow_shapes.ttl"],
+        data_shapes_file=paths["data_shapes.ttl"],
+        rule_shapes_file=paths["rule_shapes.ttl"],
+        workflow_ontology_file=paths["workflow_ontology.ttl"],
+        data_ontology_file=paths["data_ontology.ttl"],
+        rule_ontology_file=paths["rule_ontology.ttl"],
+        workflow_validation_file=paths["workflow_validation.json"],
+        data_validation_file=paths["data_validation.json"],
+        rule_validation_file=paths["rule_validation.json"],
+        workflow_revision_history_file=paths["workflow_history.json"],
+        data_revision_history_file=paths["data_history.json"],
+        rule_revision_history_file=paths["rule_history.json"],
+        workflow_self_review_file=paths["workflow_review.json"],
+        data_self_review_file=paths["data_review.json"],
+        rule_self_review_file=paths["rule_review.json"],
+    )
+
+    assert result["final_status"] == "completed"
+    assert len(observed_payloads) == 2
+    history = json.loads(paths["rule_history.json"].read_text(encoding="utf-8"))
+    assert history[0]["phase"] == "human_review_revision"
+    assert history[0]["human_review_revision"] == bundle

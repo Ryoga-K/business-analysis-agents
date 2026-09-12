@@ -94,6 +94,8 @@ PDF本文、Scenario RDF、RDFLibのparse error、語彙検証結果、SHACL検�
 Self-Review findingでもPDF本文またはScenario RDFに根拠が確認できない変更は行わないでください。
 入力にcross_consistency_revisionがある場合は、同じ対象RDF向けに集約されたCross-SHACL違反、
 原因、修正指示をまとめて処理してください。related_rdfsは参照整合性の確認にだけ使用してください。
+入力にhuman_review_revisionがある場合は、人間の判断・補足回答と元のConsistency findingを
+修正根拠として使用してください。PDF、Scenario RDF、人間の回答のいずれにも根拠のない情報は追加しないでください。
 Cross違反の解消だけを目的としてPDF本文またはScenario RDFに根拠のない業務知識を追加しないでください。
 SHACL違反を解消するためにPDF本文に根拠のない情報を追加しないでください。
 根拠のない業務仮定を置かなければ修正できない問題は、
@@ -112,6 +114,7 @@ PDF本文、Scenario RDF、現在のWorkflow RDFを比較し、構文やSHACLで
 - PDFにもScenario RDFにもない活動や関係を追加していないか。
 - 同一対象を不必要に重複抽出していないか。
 - PDFとScenario RDFが矛盾する場合はPDF本文を優先し、矛盾自体をfindingにすること。
+- human_review_revisionがある場合は、人間の回答も根拠として評価すること。
 
 出力ルール:
 - self_review_resultを必須で出力し、Workflow RDFやSHACLは出力しないでください。
