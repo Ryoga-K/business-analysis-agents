@@ -66,28 +66,23 @@ Data RDFの構造的妥当性を検証するSHACL Shapesを生成してくださ
 ルール:
 - data_shacl_turtleに、単独でRDFLibによりparse可能な完全なTurtle文字列を出力してください。
 - TurtleをMarkdownコードフェンスで囲まないでください。
+- 出力内で使用するすべてのprefixを、Turtle内で必ず宣言してください。
+- 宣言されていないprefixは使用しないでください。
+- 出力前に、使用したprefixがすべて宣言済みであり、Turtleとして構文的に完結していることを確認してください。
 
-- 出力内で使用するすべてのprefixを、出力Turtle自身の先頭で必ず宣言してください。
-- 少なくとも、使用する場合は以下の標準prefixを正しく宣言してください。
-  - sh:   <http://www.w3.org/ns/shacl#>
-  - rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-  - rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-  - xsd:  <http://www.w3.org/2001/XMLSchema#>
-- ontology_turtle由来のClass・Propertyをprefix形式で使用する場合も、
-  対応するprefix宣言を出力Turtle内に含めてください。
-- 宣言されていないprefixは絶対に使用しないでください。
-- 出力前に、使用したすべてのprefixが宣言済みであり、
-  Turtleとして構文的に完結していることを確認してください。
+- SHACL標準語彙と、固定Ontology内でClassまたはPropertyとして明示的に定義されている語彙だけをSHACL制約に使用してください。
+- sh:targetClass、sh:classには、固定Ontology内でrdfs:Classまたはowl:Classとして明示的に定義されたURIだけを使用してください。
+- sh:pathには、固定Ontology内でPropertyとして明示的に定義されたURIだけを使用してください。
+- rdfs:subClassOf、rdfs:domain、rdfs:range、schema:domainIncludes、schema:rangeIncludes等の参照先として登場するだけのURIを、ClassやPropertyとして直接使用しないでください。
 
-- SHACL標準語彙と、固定Ontologyに定義されたClass・Propertyだけを使用してください。
-- 固定OntologyのClass、Property、rdfs:domain、rdfs:range、
-  rdfs:subClassOf等を根拠に制約を作成してください。
-- raw RDFに登場する対象クラスを参考にしつつ、
-  単に現在のraw RDFだけを通すための制約にしないでください。
-- 業務インスタンスURIをsh:targetNodeとして列挙するなど、
-  特定のraw RDFへ過剰適合させないでください。
-- 固定Ontologyに根拠のないClass・Property・必須値・
-  カーディナリティを作らないでください。
+- Propertyを特定ClassのShapeに設定する場合は、固定Ontologyのrdfs:domainまたはschema:domainIncludesを根拠にしてください。
+- range制約を設定する場合も固定Ontologyのrdfs:rangeまたはschema:rangeIncludesを根拠にし、明示定義されていないClassをsh:classとして使用しないでください。
+- 固定Ontologyに明示されていないdatatype変換や語彙間の意味的対応を一般知識から推測しないでください。
+- 固定Ontologyから十分な根拠を得られない制約は追加しないでください。
+
+- raw RDFに登場する対象クラスを参考にしつつ、単に現在のraw RDFだけを通すための制約にしないでください。
+- 業務インスタンスURIをsh:targetNodeとして列挙するなど、特定のraw RDFへ過剰適合させないでください。
+- 固定Ontologyに根拠のない必須値やカーディナリティを作らないでください。
 
 - ontology_turtleとdata_rdf_rawは変更しないでください。
 - data_rdf_turtleとrule_rdf_turtleは出力しないでください。
@@ -162,28 +157,23 @@ Rule RDFの構造的妥当性を検証するSHACL Shapesを生成してくださ
 ルール:
 - rule_shacl_turtleに、単独でRDFLibによりparse可能な完全なTurtle文字列を出力してください。
 - TurtleをMarkdownコードフェンスで囲まないでください。
+- 出力内で使用するすべてのprefixを、Turtle内で必ず宣言してください。
+- 宣言されていないprefixは使用しないでください。
+- 出力前に、使用したprefixがすべて宣言済みであり、Turtleとして構文的に完結していることを確認してください。
 
-- 出力内で使用するすべてのprefixを、出力Turtle自身の先頭で必ず宣言してください。
-- 少なくとも、使用する場合は以下の標準prefixを正しく宣言してください。
-  - sh:   <http://www.w3.org/ns/shacl#>
-  - rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-  - rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-  - xsd:  <http://www.w3.org/2001/XMLSchema#>
-- ontology_turtle由来のClass・Propertyをprefix形式で使用する場合も、
-  対応するprefix宣言を出力Turtle内に含めてください。
-- 宣言されていないprefixは絶対に使用しないでください。
-- 出力前に、使用したすべてのprefixが宣言済みであり、
-  Turtleとして構文的に完結していることを確認してください。
+- SHACL標準語彙と、固定Ontology内でClassまたはPropertyとして明示的に定義されている語彙だけをSHACL制約に使用してください。
+- sh:targetClass、sh:classには、固定Ontology内でrdfs:Classまたはowl:Classとして明示的に定義されたURIだけを使用してください。
+- sh:pathには、固定Ontology内でPropertyとして明示的に定義されたURIだけを使用してください。
+- rdfs:subClassOf、rdfs:domain、rdfs:range等の参照先として登場するだけのURIを、ClassやPropertyとして直接使用しないでください。
 
-- SHACL標準語彙と、固定Ontologyに定義されたClass・Propertyだけを使用してください。
-- 固定OntologyのClass、Property、rdfs:domain、rdfs:range、
-  rdfs:subClassOf等を根拠に制約を作成してください。
-- raw RDFに登場する対象クラスを参考にしつつ、
-  単に現在のraw RDFだけを通すための制約にしないでください。
-- 業務インスタンスURIをsh:targetNodeとして列挙するなど、
-  特定のraw RDFへ過剰適合させないでください。
-- 固定Ontologyに根拠のないClass・Property・必須値・
-  カーディナリティを作らないでください。
+- Propertyを特定ClassのShapeに設定する場合は、固定Ontologyのrdfs:domainを根拠にしてください。
+- range制約を設定する場合は固定Ontologyのrdfs:rangeを根拠にし、明示定義されていないClassをsh:classとして使用しないでください。
+- 固定Ontologyに明示されていないdatatype変換や語彙間の意味的対応を一般知識から推測しないでください。
+- 固定Ontologyから十分な根拠を得られない制約は追加しないでください。
+
+- raw RDFに登場する対象クラスを参考にしつつ、単に現在のraw RDFだけを通すための制約にしないでください。
+- 業務インスタンスURIをsh:targetNodeとして列挙するなど、特定のraw RDFへ過剰適合させないでください。
+- 固定Ontologyに根拠のない必須値やカーディナリティを作らないでください。
 
 - ontology_turtleとrule_rdf_rawは変更しないでください。
 - data_rdf_turtleとrule_rdf_turtleは出力しないでください。
