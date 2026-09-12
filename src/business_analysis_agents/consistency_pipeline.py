@@ -28,6 +28,12 @@ from business_analysis_agents.rdf_validation import (
     validate_cross_rdf,
     validate_ontology_and_shapes,
 )
+from business_analysis_agents.progress import (
+    ProgressReporter,
+    ProgressStatus,
+    progress_operation,
+    report_progress,
+)
 from business_analysis_agents.workflow_pipeline import write_json, write_text
 
 
@@ -135,6 +141,7 @@ def run_consistency_pipeline(
     runner: Callable[..., Any] | None = None,
     cross_shacl_file: Path | str | None = None,
     expected_cross_shapes_hash: str | None = None,
+    progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Generate or reuse Cross-SHACL, validate merged RDF, and analyze violations."""
 
@@ -180,16 +187,30 @@ def run_consistency_pipeline(
         rule_ontology_turtle=rule_ontology,
     )
     if cross_shacl_file is None:
-        shacl_output = run_consistency_agent(
-            ConsistencyAgentMode.CROSS_SHACL_GENERATION,
-            agent_input.model_dump(mode="json", exclude_none=True),
-            model=model,
-            runner=runner,
-        )
+        with progress_operation(
+            progress,
+            phase="consistency",
+            step="cross_shacl_generation",
+            message="Cross-SHACL generation",
+            completed_message="Cross-SHACL generated",
+        ):
+            shacl_output = run_consistency_agent(
+                ConsistencyAgentMode.CROSS_SHACL_GENERATION,
+                agent_input.model_dump(mode="json", exclude_none=True),
+                model=model,
+                runner=runner,
+            )
         cross_shacl_turtle = _require_cross_shacl(shacl_output.cross_shacl_turtle)
         write_text(shapes_path, cross_shacl_turtle)
         cross_shacl_source = "ai_generated"
     else:
+        report_progress(
+            progress,
+            phase="consistency",
+            step="cross_shacl_generation",
+            status=ProgressStatus.RUNNING,
+            message="Reusing generated Cross-SHACL",
+        )
         cross_shacl_source_path, cross_shacl_turtle = _load_required_turtle(
             cross_shacl_file,
             "generated Cross-SHACL",
@@ -224,19 +245,45 @@ def run_consistency_pipeline(
         cross_shapes_hash,
     )
 
-    validation = validate_cross_rdf(
-        workflow_turtle,
-        data_turtle,
-        rule_turtle,
-        workflow_ontology,
-        data_ontology,
-        rule_ontology,
-        cross_shacl_turtle,
-    )
+    with progress_operation(
+        progress,
+        phase="consistency",
+        step="cross_validation",
+        message=(
+            "Cross re-validation"
+            if cross_shacl_file is not None
+            else "Cross validation"
+        ),
+        completed_message="Cross validation completed",
+    ):
+        validation = validate_cross_rdf(
+            workflow_turtle,
+            data_turtle,
+            rule_turtle,
+            workflow_ontology,
+            data_ontology,
+            rule_ontology,
+            cross_shacl_turtle,
+        )
     write_json(validation_path, _validation_payload(validation))
 
     violations = (
         validation.shacl_result.violations if validation.shacl_result else []
+    )
+    report_progress(
+        progress,
+        phase="consistency",
+        step="cross_validation",
+        status=(
+            ProgressStatus.PASSED
+            if not violations and validation.conforms
+            else ProgressStatus.FAILED
+        ),
+        message=(
+            "Cross validation passed"
+            if not violations and validation.conforms
+            else f"Cross validation found {len(violations)} violation(s)"
+        ),
     )
     analyses: list[ConsistencyViolationAnalysis] = []
     analysis_summary: str | None = None
@@ -247,12 +294,19 @@ def run_consistency_pipeline(
                 "validation_result": validation.shacl_result,
             }
         )
-        analysis_output = run_consistency_agent(
-            ConsistencyAgentMode.VIOLATION_ANALYSIS,
-            analysis_input.model_dump(mode="json", exclude_none=True),
-            model=model,
-            runner=runner,
-        )
+        with progress_operation(
+            progress,
+            phase="consistency",
+            step="violation_analysis",
+            message="Cross violation analysis",
+            completed_message="Cross violation analysis completed",
+        ):
+            analysis_output = run_consistency_agent(
+                ConsistencyAgentMode.VIOLATION_ANALYSIS,
+                analysis_input.model_dump(mode="json", exclude_none=True),
+                model=model,
+                runner=runner,
+            )
         analyses = analysis_output.violation_analyses
         analysis_summary = analysis_output.summary
         _validate_analyses(analyses, len(violations))

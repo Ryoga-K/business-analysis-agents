@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 from types import SimpleNamespace
 
 import pymupdf
@@ -26,6 +27,7 @@ from business_analysis_agents.models import (
     SelfReviewResult,
 )
 from business_analysis_agents.rdf_validation import validate_ontology_and_shapes, validate_rdf
+from business_analysis_agents.progress import ProgressReporter
 
 
 ONTOLOGY_TTL = """
@@ -390,6 +392,8 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
     fixed_files = _write_fixed_files(tmp_path)
     pdf_file = _write_source_pdf(tmp_path)
     call_order: list[str] = []
+    progress_stream = StringIO()
+    progress = ProgressReporter(stream=progress_stream)
 
     def fake_runner(_agent, prompt):
         if "data_shacl_generation" in prompt:
@@ -460,6 +464,7 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
         runner=fake_runner,
         data_ontology_file=fixed_files[0],
         rule_ontology_file=fixed_files[1],
+        progress=progress,
     )
 
     assert call_order == [
@@ -471,6 +476,11 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
         "rule_self_review",
     ]
     assert result["final_status"] == "completed"
+    progress_output = progress_stream.getvalue()
+    assert "[Phase 3/6] Data RDF" in progress_output
+    assert "[RUN] Data RDF generation" in progress_output
+    assert "[Phase 4/6] Rule RDF" in progress_output
+    assert "[RUN] Rule RDF generation" in progress_output
     assert {path.name for path in (tmp_path / "data_rule").iterdir()} == {
         "data_final.ttl",
         "data_shapes_generated.ttl",

@@ -21,6 +21,7 @@ from business_analysis_agents.models import (
 def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
     monkeypatch,
     tmp_path,
+    capsys,
 ) -> None:
     """Consistency violations complete the run without becoming a system error."""
 
@@ -53,6 +54,8 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
         assert kwargs["scenario_file"] == str(scenario_path)
         assert kwargs["pdf_file"] == pdf_path
         assert kwargs["output_dir"] == tmp_path / "data_rule"
+        kwargs["progress"].phase(3, 6, "Data RDF", "data")
+        kwargs["progress"].phase(4, 6, "Rule RDF", "rule")
         return {"output_dir": str(kwargs["output_dir"]), "final_status": "completed"}
 
     def fake_consistency(**kwargs):
@@ -125,6 +128,20 @@ def test_end_to_end_controller_connects_all_pipelines_and_accepts_inconsistency(
     assert saved["stages"][4]["pipeline_status"] == "needs_revision"
     assert "consistency_evaluation" in saved["output_files"]
     assert "human_review" in saved["output_files"]
+    progress_output = capsys.readouterr().out
+    for index, name in enumerate(
+        (
+            "Scenario RDF",
+            "Workflow RDF",
+            "Data RDF",
+            "Rule RDF",
+            "Cross Consistency",
+            "Finalization / Human Review",
+        ),
+        start=1,
+    ):
+        assert f"[Phase {index}/6] {name}" in progress_output
+    assert (tmp_path / "controller" / "progress.jsonl").exists()
 
 
 def test_end_to_end_controller_stops_after_stage_exception(monkeypatch, tmp_path) -> None:

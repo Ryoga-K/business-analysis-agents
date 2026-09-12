@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +22,7 @@ from business_analysis_agents.models import (
     RdfKind,
 )
 from business_analysis_agents.rdf_validation import content_hash, validate_cross_rdf
+from business_analysis_agents.progress import ProgressReporter
 
 
 WORKFLOW_ONTOLOGY = """
@@ -183,6 +185,8 @@ def test_consistency_pipeline_saves_shapes_and_conforming_result(
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     paths = _write_inputs(tmp_path)
     calls: list[str] = []
+    progress_stream = StringIO()
+    progress = ProgressReporter(stream=progress_stream)
 
     def fake_runner(_agent, prompt):
         calls.append(prompt)
@@ -210,10 +214,15 @@ def test_consistency_pipeline_saves_shapes_and_conforming_result(
         rule_ontology_file=paths["rule_ontology.ttl"],
         output_dir=output_dir,
         runner=fake_runner,
+        progress=progress,
     )
 
     assert len(calls) == 1
     assert result["final_status"] == "completed"
+    progress_output = progress_stream.getvalue()
+    assert "[RUN] Cross-SHACL generation" in progress_output
+    assert "[RUN] Cross validation" in progress_output
+    assert "[OK] Cross validation passed" in progress_output
     assert {path.name for path in output_dir.iterdir()} == {
         "consistency_shapes_generated.ttl",
         "consistency_validation.json",

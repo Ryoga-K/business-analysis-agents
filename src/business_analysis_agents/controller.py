@@ -59,6 +59,12 @@ from business_analysis_agents.models import (
     ScenarioAgentInput,
 )
 from business_analysis_agents.rdf_validation import content_hash
+from business_analysis_agents.progress import (
+    ProgressReporter,
+    ProgressStatus,
+    progress_operation,
+    report_progress,
+)
 from business_analysis_agents.review.cli import (
     DEFAULT_CONSISTENCY_EVALUATION as DEFAULT_REVIEW_CONSISTENCY_EVALUATION,
     DEFAULT_DATA_RDF as DEFAULT_REVIEW_DATA_RDF,
@@ -87,22 +93,37 @@ def run_scenario_pipeline(
     model: str,
     output_dir: Path | str = "outputs/scenario",
     ontology_file: Path | str = DEFAULT_SCENARIO_ONTOLOGY,
+    progress: ProgressReporter | None = None,
 ) -> dict[str, str]:
     """Run the existing Scenario generation flow and save Scenario RDF."""
 
     pdf_path = Path(pdf_file)
-    document = load_pdf_document(pdf_path)
+    with progress_operation(
+        progress,
+        phase="scenario",
+        step="pdf_text_extraction",
+        message="PDF text extraction",
+        completed_message="PDF text extracted",
+    ):
+        document = load_pdf_document(pdf_path)
     ontology_path, scenario_ontology = load_fixed_turtle(
         ontology_file,
         "Scenario ontology",
     )
-    output = run_scenario_agent(
-        ScenarioAgentInput(
-            document=document,
-            ontology_turtle=scenario_ontology,
-        ),
-        model=model,
-    )
+    with progress_operation(
+        progress,
+        phase="scenario",
+        step="rdf_generation",
+        message="Scenario RDF generation",
+        completed_message="Scenario RDF generated",
+    ):
+        output = run_scenario_agent(
+            ScenarioAgentInput(
+                document=document,
+                ontology_turtle=scenario_ontology,
+            ),
+            model=model,
+        )
     scenario_path = save_scenario_output(output, output_dir)
     return {
         "output_dir": str(Path(output_dir)),
@@ -133,6 +154,7 @@ def _finish_failed_run(
     error_type: str,
     error_message: str,
     stage_status: ControllerStageStatus = ControllerStageStatus.FAILED,
+    progress: ProgressReporter | None = None,
 ) -> ControllerRunSummary:
     result = _stage_result(summary, stage)
     result.status = stage_status
@@ -147,6 +169,20 @@ def _finish_failed_run(
     summary.error_message = error_message
     summary.finished_at = datetime.now().astimezone()
     _save_controller_summary(summary, summary_path)
+    report_progress(
+        progress,
+        phase=stage.value,
+        step="phase",
+        status=(
+            ProgressStatus.WARNING
+            if stage_status is ControllerStageStatus.NEEDS_REVIEW
+            else ProgressStatus.FAILED
+        ),
+        message=(
+            f"{stage.value.replace('_', ' ').title()} ended with "
+            f"{error_type}"
+        ),
+    )
     return summary
 
 
@@ -230,6 +266,7 @@ def run_consistency_revision_loop(
     max_workflow_self_review_iterations: int,
     max_data_self_review_iterations: int,
     max_rule_self_review_iterations: int,
+    progress: ProgressReporter | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run Cross Consistency and bounded targeted revision rounds."""
 
@@ -253,6 +290,7 @@ def run_consistency_revision_loop(
         workflow_ontology_file=workflow_ontology_file,
         data_ontology_file=data_ontology_file,
         rule_ontology_file=rule_ontology_file,
+        progress=progress,
     )
     cross_shapes_hash = str(consistency_result.get("cross_shapes_hash", ""))
     if not cross_shapes_hash:
@@ -283,14 +321,37 @@ def run_consistency_revision_loop(
             "revision_results": [],
         }
         if conforms:
+            report_progress(
+                progress,
+                phase="consistency",
+                step="cross_validation",
+                status=ProgressStatus.COMPLETED,
+                message="Cross Consistency passed",
+            )
             iteration_history.append(record)
             history["status"] = "completed"
             break
         if revision_round >= max_cross_revision_iterations:
+            report_progress(
+                progress,
+                phase="consistency",
+                step="cross_revision",
+                status=ProgressStatus.WARNING,
+                message="Maximum Cross revision iterations reached",
+                iteration=revision_round,
+                max_iterations=max_cross_revision_iterations,
+            )
             iteration_history.append(record)
             history["status"] = "max_iterations"
             break
         if evaluation.get("can_auto_repair") is not True or not bundles:
+            report_progress(
+                progress,
+                phase="consistency",
+                step="violation_analysis",
+                status=ProgressStatus.WARNING,
+                message="Cross violations cannot be repaired automatically",
+            )
             iteration_history.append(record)
             history["status"] = "not_auto_repairable"
             break
@@ -309,40 +370,58 @@ def run_consistency_revision_loop(
         }
         for bundle in bundles:
             target = AgentName(str(bundle["target_agent"]))
-            result = run_targeted_rdf_revision(
-                target_agent=target,
-                repair_bundle=bundle,
-                consistency_iteration=consistency_iteration,
-                scenario_file=scenario_file,
-                pdf_file=pdf_file,
-                model=model,
-                workflow_file=workflow_file,
-                data_file=data_file,
-                rule_file=rule_file,
-                workflow_shapes_file=workflow_dir / "workflow_shapes_generated.ttl",
-                data_shapes_file=data_rule_dir / "data_shapes_generated.ttl",
-                rule_shapes_file=data_rule_dir / "rule_shapes_generated.ttl",
-                workflow_ontology_file=workflow_ontology_file,
-                data_ontology_file=data_ontology_file,
-                rule_ontology_file=rule_ontology_file,
-                workflow_validation_file=workflow_dir / "workflow_validation.json",
-                data_validation_file=data_rule_dir / "data_validation.json",
-                rule_validation_file=data_rule_dir / "rule_validation.json",
-                workflow_revision_history_file=(
-                    workflow_dir / "workflow_revision_history.json"
-                ),
-                data_revision_history_file=(
-                    data_rule_dir / "data_revision_history.json"
-                ),
-                rule_revision_history_file=(
-                    data_rule_dir / "rule_revision_history.json"
-                ),
-                workflow_self_review_file=workflow_dir / "workflow_self_review.json",
-                data_self_review_file=data_rule_dir / "data_self_review.json",
-                rule_self_review_file=data_rule_dir / "rule_self_review.json",
-                max_shacl_iterations=shacl_limits[target],
-                max_self_review_iterations=self_review_limits[target],
-            )
+            with progress_operation(
+                progress,
+                phase="consistency",
+                step="targeted_revision",
+                message="Cross revision",
+                completed_message="Targeted RDF revision completed",
+                iteration=revision_round + 1,
+                max_iterations=max_cross_revision_iterations,
+                target=target.value,
+                start_status=ProgressStatus.REVISION,
+            ):
+                result = run_targeted_rdf_revision(
+                    target_agent=target,
+                    repair_bundle=bundle,
+                    consistency_iteration=consistency_iteration,
+                    scenario_file=scenario_file,
+                    pdf_file=pdf_file,
+                    model=model,
+                    workflow_file=workflow_file,
+                    data_file=data_file,
+                    rule_file=rule_file,
+                    workflow_shapes_file=(
+                        workflow_dir / "workflow_shapes_generated.ttl"
+                    ),
+                    data_shapes_file=data_rule_dir / "data_shapes_generated.ttl",
+                    rule_shapes_file=data_rule_dir / "rule_shapes_generated.ttl",
+                    workflow_ontology_file=workflow_ontology_file,
+                    data_ontology_file=data_ontology_file,
+                    rule_ontology_file=rule_ontology_file,
+                    workflow_validation_file=(
+                        workflow_dir / "workflow_validation.json"
+                    ),
+                    data_validation_file=data_rule_dir / "data_validation.json",
+                    rule_validation_file=data_rule_dir / "rule_validation.json",
+                    workflow_revision_history_file=(
+                        workflow_dir / "workflow_revision_history.json"
+                    ),
+                    data_revision_history_file=(
+                        data_rule_dir / "data_revision_history.json"
+                    ),
+                    rule_revision_history_file=(
+                        data_rule_dir / "rule_revision_history.json"
+                    ),
+                    workflow_self_review_file=(
+                        workflow_dir / "workflow_self_review.json"
+                    ),
+                    data_self_review_file=data_rule_dir / "data_self_review.json",
+                    rule_self_review_file=data_rule_dir / "rule_self_review.json",
+                    max_shacl_iterations=shacl_limits[target],
+                    max_self_review_iterations=self_review_limits[target],
+                    progress=progress,
+                )
             revision_results.append(result)
             if result.get("final_status") != "completed":
                 revision_failed = True
@@ -356,11 +435,27 @@ def run_consistency_revision_loop(
         iteration_history.append(record)
         write_json(history_file, history)
         if revision_failed:
+            report_progress(
+                progress,
+                phase="consistency",
+                step="targeted_revision",
+                status=ProgressStatus.WARNING,
+                message="Targeted RDF did not pass individual checks",
+            )
             history["status"] = "individual_revision_failed"
             break
 
         revision_round += 1
         consistency_iteration += 1
+        report_progress(
+            progress,
+            phase="consistency",
+            step="cross_revalidation",
+            status=ProgressStatus.RUNNING,
+            message="Cross re-validation",
+            iteration=revision_round,
+            max_iterations=max_cross_revision_iterations,
+        )
         consistency_result = run_consistency_pipeline(
             model=model,
             workflow_file=workflow_file,
@@ -375,6 +470,7 @@ def run_consistency_revision_loop(
             rule_ontology_file=rule_ontology_file,
             cross_shacl_file=cross_shapes_file,
             expected_cross_shapes_hash=cross_shapes_hash,
+            progress=progress,
         )
 
     history["revision_rounds"] = revision_round
@@ -401,6 +497,7 @@ def run_end_to_end_controller(
     max_rule_self_review_iterations: int = DEFAULT_MAX_RULE_SELF_REVIEW_ITERATIONS,
     max_cross_revision_iterations: int = DEFAULT_MAX_CROSS_REVISION_ITERATIONS,
     reviewer: str | None = None,
+    progress: ProgressReporter | None = None,
 ) -> ControllerRunSummary:
     """Run Scenario through Human Review in sequence."""
 
@@ -410,6 +507,8 @@ def run_end_to_end_controller(
     data_rule_dir = root / "data_rule"
     consistency_dir = root / "consistency"
     summary_path = root / "controller" / "run_summary.json"
+    progress_path = root / "controller" / "progress.jsonl"
+    progress_reporter = progress or ProgressReporter(log_file=progress_path)
     stages = [
         ControllerStageResult(stage=stage)
         for stage in (
@@ -424,17 +523,22 @@ def run_end_to_end_controller(
         input_pdf=str(Path(pdf_file).resolve()),
         started_at=datetime.now().astimezone(),
         stages=stages,
-        output_files={"run_summary": str(summary_path)},
+        output_files={
+            "run_summary": str(summary_path),
+            "progress_log": str(progress_reporter.log_file or progress_path),
+        },
     )
     _save_controller_summary(summary, summary_path)
 
     scenario_stage = _stage_result(summary, ControllerStage.SCENARIO)
+    progress_reporter.phase(1, 6, "Scenario RDF", "scenario")
     try:
         scenario_result = run_scenario_pipeline(
             pdf_file=pdf_file,
             model=model,
             output_dir=scenario_dir,
             ontology_file=scenario_ontology_file,
+            progress=progress_reporter,
         )
     except Exception as error:
         return _finish_failed_run(
@@ -443,15 +547,24 @@ def run_end_to_end_controller(
             ControllerStage.SCENARIO,
             type(error).__name__,
             str(error),
+            progress=progress_reporter,
         )
     scenario_file = scenario_result["scenario_file"]
     scenario_stage.status = ControllerStageStatus.COMPLETED
     scenario_stage.pipeline_status = scenario_result["final_status"]
     scenario_stage.output_files = {"scenario_rdf": scenario_file}
     summary.output_files.update(scenario_stage.output_files)
+    report_progress(
+        progress_reporter,
+        phase="scenario",
+        step="phase",
+        status=ProgressStatus.COMPLETED,
+        message="Scenario completed",
+    )
     _save_controller_summary(summary, summary_path)
 
     workflow_stage = _stage_result(summary, ControllerStage.WORKFLOW)
+    progress_reporter.phase(2, 6, "Workflow RDF", "workflow")
     try:
         workflow_result = run_workflow_pipeline(
             scenario_file=scenario_file,
@@ -461,6 +574,7 @@ def run_end_to_end_controller(
             max_workflow_iterations=max_workflow_iterations,
             max_self_review_iterations=max_workflow_self_review_iterations,
             ontology_file=workflow_ontology_file,
+            progress=progress_reporter,
         )
     except Exception as error:
         return _finish_failed_run(
@@ -469,6 +583,7 @@ def run_end_to_end_controller(
             ControllerStage.WORKFLOW,
             type(error).__name__,
             str(error),
+            progress=progress_reporter,
         )
     workflow_stage.pipeline_status = workflow_result["final_status"]
     workflow_stage.output_files = {
@@ -489,8 +604,16 @@ def run_end_to_end_controller(
             "ValidationNotConforming",
             "Workflow RDF did not pass individual validation.",
             ControllerStageStatus.NEEDS_REVIEW,
+            progress=progress_reporter,
         )
     workflow_stage.status = ControllerStageStatus.COMPLETED
+    report_progress(
+        progress_reporter,
+        phase="workflow",
+        step="phase",
+        status=ProgressStatus.COMPLETED,
+        message="Workflow completed",
+    )
     _save_controller_summary(summary, summary_path)
 
     data_rule_stage = _stage_result(summary, ControllerStage.DATA_RULE)
@@ -506,6 +629,7 @@ def run_end_to_end_controller(
             max_rule_self_review_iterations=max_rule_self_review_iterations,
             data_ontology_file=data_ontology_file,
             rule_ontology_file=rule_ontology_file,
+            progress=progress_reporter,
         )
     except Exception as error:
         return _finish_failed_run(
@@ -514,6 +638,7 @@ def run_end_to_end_controller(
             ControllerStage.DATA_RULE,
             type(error).__name__,
             str(error),
+            progress=progress_reporter,
         )
     data_rule_stage.pipeline_status = data_rule_result["final_status"]
     data_rule_stage.output_files = {
@@ -537,11 +662,13 @@ def run_end_to_end_controller(
             "ValidationNotConforming",
             "Data RDF or Rule RDF did not pass individual validation.",
             ControllerStageStatus.NEEDS_REVIEW,
+            progress=progress_reporter,
         )
     data_rule_stage.status = ControllerStageStatus.COMPLETED
     _save_controller_summary(summary, summary_path)
 
     consistency_stage = _stage_result(summary, ControllerStage.CONSISTENCY)
+    progress_reporter.phase(5, 6, "Cross Consistency", "consistency")
     try:
         consistency_result, consistency_history = run_consistency_revision_loop(
             model=model,
@@ -562,6 +689,7 @@ def run_end_to_end_controller(
             ),
             max_data_self_review_iterations=max_data_self_review_iterations,
             max_rule_self_review_iterations=max_rule_self_review_iterations,
+            progress=progress_reporter,
         )
     except Exception as error:
         return _finish_failed_run(
@@ -570,6 +698,7 @@ def run_end_to_end_controller(
             ControllerStage.CONSISTENCY,
             type(error).__name__,
             str(error),
+            progress=progress_reporter,
         )
     consistency_status = consistency_result["final_status"]
     consistency_stage.pipeline_status = consistency_status
@@ -595,6 +724,7 @@ def run_end_to_end_controller(
             ControllerStage.CONSISTENCY,
             "UnexpectedPipelineStatus",
             f"Unexpected Consistency pipeline status: {consistency_status}",
+            progress=progress_reporter,
         )
     consistency_stage.status = (
         ControllerStageStatus.COMPLETED
@@ -609,7 +739,15 @@ def run_end_to_end_controller(
     _save_controller_summary(summary, summary_path)
 
     human_review_stage = _stage_result(summary, ControllerStage.HUMAN_REVIEW)
+    progress_reporter.phase(6, 6, "Finalization / Human Review", "finalization")
     human_review_file = root / "human_review" / "human_review.json"
+    report_progress(
+        progress_reporter,
+        phase="finalization",
+        step="human_review",
+        status=ProgressStatus.RUNNING,
+        message="Human Review",
+    )
     try:
         human_review = run_human_review(
             workflow_file=workflow_dir / "workflow_final.ttl",
@@ -628,6 +766,7 @@ def run_end_to_end_controller(
             ControllerStage.HUMAN_REVIEW,
             type(error).__name__,
             str(error),
+            progress=progress_reporter,
         )
     human_review_stage.status = ControllerStageStatus.COMPLETED
     human_review_stage.pipeline_status = human_review.status.value
@@ -639,6 +778,13 @@ def run_end_to_end_controller(
     summary.completed = True
     summary.finished_at = datetime.now().astimezone()
     _save_controller_summary(summary, summary_path)
+    report_progress(
+        progress_reporter,
+        phase="finalization",
+        step="human_review",
+        status=ProgressStatus.COMPLETED,
+        message="End-to-End execution completed",
+    )
     return summary
 
 

@@ -29,6 +29,11 @@ from business_analysis_agents.rdf_validation import (
     validate_workflow_rdf,
     validation_feedback,
 )
+from business_analysis_agents.progress import (
+    ProgressReporter,
+    ProgressStatus,
+    report_progress,
+)
 from business_analysis_agents.self_review import run_self_review_loop
 from business_analysis_agents.workflow_pipeline import (
     load_scenario_rdf,
@@ -135,6 +140,7 @@ def run_targeted_rdf_revision(
     max_self_review_iterations: int = 3,
     workflow_runner: Callable[..., Any] | None = None,
     data_rule_runner: Callable[..., Any] | None = None,
+    progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Revise one RDF, then run its fixed individual SHACL and Self-Review."""
 
@@ -316,6 +322,17 @@ def run_targeted_rdf_revision(
     current_rdf, revision_output = run_revision(current_rdf, validation)
     revision_iteration = len(revision_history) + 1
     validation = validate_target(current_rdf, revision_iteration)
+    report_progress(
+        progress,
+        phase=target_agent.value,
+        step="shacl_validation",
+        status=ProgressStatus.PASSED if validation.conforms else ProgressStatus.FAILED,
+        message=(
+            f"{target_agent.value.title()} validation passed"
+            if validation.conforms
+            else f"{target_agent.value.title()} validation found violations"
+        ),
+    )
     revision_history.append(
         {
             "iteration": revision_iteration,
@@ -327,12 +344,38 @@ def run_targeted_rdf_revision(
         }
     )
 
-    for _ in range(max_shacl_iterations):
+    for repair_iteration in range(1, max_shacl_iterations + 1):
         if validation.conforms:
             break
+        report_progress(
+            progress,
+            phase=target_agent.value,
+            step="shacl_revision",
+            status=ProgressStatus.REVISION,
+            message=f"{target_agent.value.title()} SHACL revision",
+            iteration=repair_iteration,
+            max_iterations=max_shacl_iterations,
+        )
         current_rdf, revision_output = run_revision(current_rdf, validation)
         revision_iteration = len(revision_history) + 1
         validation = validate_target(current_rdf, revision_iteration)
+        report_progress(
+            progress,
+            phase=target_agent.value,
+            step="shacl_validation",
+            status=(
+                ProgressStatus.PASSED
+                if validation.conforms
+                else ProgressStatus.FAILED
+            ),
+            message=(
+                f"{target_agent.value.title()} validation passed"
+                if validation.conforms
+                else f"{target_agent.value.title()} violations remain"
+            ),
+            iteration=repair_iteration,
+            max_iterations=max_shacl_iterations,
+        )
         revision_history.append(
             {
                 "iteration": revision_iteration,
@@ -441,6 +484,8 @@ def run_targeted_rdf_revision(
         validate_rdf=validate_target,
         serialize_validation=_validation_payload,
         assert_fixed_resources=assert_fixed,
+        progress=progress,
+        phase=target_agent.value,
     )
 
     write_text(rdf_files[target_agent], current_rdf)

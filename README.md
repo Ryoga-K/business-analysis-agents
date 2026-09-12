@@ -21,6 +21,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - Cross-SHACL違反の原因、修正対象Agent、修正指示の構造化出力
 - Controllerによる対象RDF単位のCross revision、個別SHACL再検証、Self-Review、Cross再検証
 - Python ControllerによるPDFからHuman ReviewまでのEnd-to-End実行
+- End-to-End実行のフェーズ・反復回数・API処理時間のCLI進捗表示とJSONLログ保存
 - 工程失敗時の後続停止と`run_summary.json`への実行結果保存
 - SHACL構造に基づくConsistency findingのグループレビューと構造化結果保存
 - 実行結果のJSON / Turtle保存
@@ -67,6 +68,9 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 │       │   ├── data_rule.py
 │       │   └── consistency.py
 │       ├── controller.py
+│       ├── progress.py
+│       ├── self_review.py
+│       ├── targeted_revision_pipeline.py
 │       ├── config.py
 │       ├── document_loader.py
 │       ├── models.py
@@ -154,10 +158,31 @@ PDF
 - `outputs/consistency/consistency_revision_history.json`
 - `outputs/human_review/human_review.json`
 - `outputs/controller/run_summary.json`
+- `outputs/controller/progress.jsonl`
 
 WorkflowまたはData/Ruleの個別検証が未適合の場合と、工程内で例外が発生した場合は後続工程を実行しません。自動Cross revision後もConsistencyが`needs_revision`の場合はHuman Reviewへ進みます。findingや人間の判断内容はシステムエラーとせず、Human Reviewの入出力処理が失敗した場合だけ全体を失敗とします。
 
 ControllerのCross revision回数は`--max-cross-revision-iterations`で変更できます。デフォルトは`MAX_REPAIR_ITERATIONS`です。
+
+実行中は、共通の進捗Reporterが大フェーズ、API呼び出し前後、検証結果、修正回数と修正対象を表示します。表示にはWindows端末でも扱いやすい`[RUN]`、`[OK]`、`[NG]`、`[WARN]`、`[REV]`、`[DONE]`を使用します。
+
+```text
+[Phase 2/6] Workflow RDF
+  [RUN] Workflow RDF generation
+  [OK] Workflow RDF generated (12.4 sec)
+  [OK] Workflow SHACL validation passed
+  [RUN] Workflow Self-Review
+  [OK] Workflow Self-Review passed
+  [DONE] Workflow completed
+
+[Phase 5/6] Cross Consistency
+  [NG] Cross validation found 3 violation(s)
+  [REV] Cross revision 1/3 [target: rule]
+  [RUN] Cross re-validation 1/3
+  [DONE] Cross Consistency passed
+```
+
+同じイベントは`outputs/controller/progress.jsonl`にも保存します。各行には`timestamp`、`phase`、`step`、`status`、`iteration`、`max_iterations`、`duration`、`message`、`target`を記録し、APIキー、PDF本文、プロンプト全文は含めません。
 
 ### 3. PDFからScenario RDFを生成
 
@@ -386,7 +411,7 @@ python -m pytest
 直近の確認結果:
 
 ```text
-68 passed
+70 passed
 ```
 
 ## 未実装

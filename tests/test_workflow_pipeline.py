@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 from types import SimpleNamespace
 
 import pymupdf
@@ -29,6 +30,7 @@ from business_analysis_agents.rdf_validation import (
     validate_ontology_and_shapes,
     validate_workflow_rdf,
 )
+from business_analysis_agents.progress import ProgressReporter
 from business_analysis_agents.workflow_pipeline import run_workflow_pipeline
 
 
@@ -379,6 +381,8 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
     workflow_dir = tmp_path / "workflow"
     workflow_dir.mkdir()
     (workflow_dir / "workflow_run_metadata.json").write_text("stale", encoding="utf-8")
+    progress_stream = StringIO()
+    progress = ProgressReporter(stream=progress_stream)
 
     call_order: list[str] = []
 
@@ -422,6 +426,7 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
         output_dir=workflow_dir,
         runner=fake_runner,
         ontology_file=ontology_file,
+        progress=progress,
     )
 
     assert call_order == [
@@ -430,6 +435,10 @@ def test_pipeline_stops_when_conforms_true(monkeypatch, tmp_path) -> None:
         "workflow_self_review",
     ]
     assert result["final_status"] == "completed"
+    progress_output = progress_stream.getvalue()
+    assert "[RUN] Workflow RDF generation" in progress_output
+    assert "[RUN] Workflow SHACL generation" in progress_output
+    assert "[OK] Workflow Self-Review passed" in progress_output
     assert {path.name for path in workflow_dir.iterdir()} == {
         "workflow_final.ttl",
         "workflow_shapes_generated.ttl",

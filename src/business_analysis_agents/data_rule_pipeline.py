@@ -31,6 +31,12 @@ from business_analysis_agents.rdf_validation import (
     validate_rdf,
     validation_feedback,
 )
+from business_analysis_agents.progress import (
+    ProgressReporter,
+    ProgressStatus,
+    progress_operation,
+    report_progress,
+)
 from business_analysis_agents.self_review import run_self_review_loop
 from business_analysis_agents.workflow_pipeline import (
     load_scenario_rdf,
@@ -109,6 +115,7 @@ def _generate_and_revise_data(
     output_dir: Path,
     max_iterations: int,
     max_self_review_iterations: int,
+    progress: ProgressReporter | None,
 ) -> tuple[
     str,
     str,
@@ -121,29 +128,43 @@ def _generate_and_revise_data(
     SelfReviewHistory,
 ]:
     data_history: list[dict[str, Any]] = []
-    output = run_data_rule_agent(
-        DataRuleAgentMode.DATA_GENERATION,
-        {
-            "scenario_rdf_turtle": scenario_turtle,
-            "source_document": source_document,
-            "ontology_turtle": data_ontology,
-            "ontology_hash": data_ontology_hash,
-        },
-        model=model,
-        runner=runner,
-    )
+    with progress_operation(
+        progress,
+        phase="data",
+        step="rdf_generation",
+        message="Data RDF generation",
+        completed_message="Data RDF generated",
+    ):
+        output = run_data_rule_agent(
+            DataRuleAgentMode.DATA_GENERATION,
+            {
+                "scenario_rdf_turtle": scenario_turtle,
+                "source_document": source_document,
+                "ontology_turtle": data_ontology,
+                "ontology_hash": data_ontology_hash,
+            },
+            model=model,
+            runner=runner,
+        )
     data_turtle = _require_text(output.data_rdf_turtle, "data_rdf_turtle")
     initial_data_turtle = data_turtle
-    shacl_output = run_data_rule_agent(
-        DataRuleAgentMode.DATA_SHACL_GENERATION,
-        {
-            "data_rdf_raw": data_turtle,
-            "ontology_turtle": data_ontology,
-            "ontology_hash": data_ontology_hash,
-        },
-        model=model,
-        runner=runner,
-    )
+    with progress_operation(
+        progress,
+        phase="data",
+        step="shacl_generation",
+        message="Data SHACL generation",
+        completed_message="Data SHACL generated",
+    ):
+        shacl_output = run_data_rule_agent(
+            DataRuleAgentMode.DATA_SHACL_GENERATION,
+            {
+                "data_rdf_raw": data_turtle,
+                "ontology_turtle": data_ontology,
+                "ontology_hash": data_ontology_hash,
+            },
+            model=model,
+            runner=runner,
+        )
     data_shapes = _require_text(
         shacl_output.data_shacl_turtle,
         "data_shacl_turtle",
@@ -163,11 +184,31 @@ def _generate_and_revise_data(
         rdf_kind=RdfKind.DATA,
         iteration=0,
     )
+    report_progress(
+        progress,
+        phase="data",
+        step="shacl_validation",
+        status=ProgressStatus.PASSED if validation.conforms else ProgressStatus.FAILED,
+        message=(
+            "Data SHACL validation passed"
+            if validation.conforms
+            else "Data SHACL validation found violations"
+        ),
+    )
     final_output = output
 
     for iteration in range(1, max_iterations + 1):
         if validation.conforms:
             break
+        report_progress(
+            progress,
+            phase="data",
+            step="shacl_revision",
+            status=ProgressStatus.REVISION,
+            message="Data SHACL revision",
+            iteration=iteration,
+            max_iterations=max_iterations,
+        )
         _assert_fixed_resources(
             data_ontology,
             data_shapes,
@@ -199,6 +240,23 @@ def _generate_and_revise_data(
             data_shapes,
             rdf_kind=RdfKind.DATA,
             iteration=iteration,
+        )
+        report_progress(
+            progress,
+            phase="data",
+            step="shacl_validation",
+            status=(
+                ProgressStatus.PASSED
+                if validation.conforms
+                else ProgressStatus.FAILED
+            ),
+            message=(
+                "Data SHACL validation passed"
+                if validation.conforms
+                else "Data SHACL violations remain"
+            ),
+            iteration=iteration,
+            max_iterations=max_iterations,
         )
         final_output = output
         data_history.append(
@@ -289,6 +347,8 @@ def _generate_and_revise_data(
             validate_rdf=validate_revised_rdf,
             serialize_validation=_validation_payload,
             assert_fixed_resources=assert_fixed_resources,
+            progress=progress,
+            phase="data",
         )
     )
     if revision_output is not None:
@@ -317,6 +377,7 @@ def _generate_and_revise_rule(
     output_dir: Path,
     max_iterations: int,
     max_self_review_iterations: int,
+    progress: ProgressReporter | None,
 ) -> tuple[
     str,
     str,
@@ -329,30 +390,44 @@ def _generate_and_revise_rule(
     SelfReviewHistory,
 ]:
     rule_history: list[dict[str, Any]] = []
-    output = run_data_rule_agent(
-        DataRuleAgentMode.RULE_GENERATION,
-        {
-            "scenario_rdf_turtle": scenario_turtle,
-            "source_document": source_document,
-            "validated_data_rdf": data_turtle,
-            "ontology_turtle": rule_ontology,
-            "ontology_hash": rule_ontology_hash,
-        },
-        model=model,
-        runner=runner,
-    )
+    with progress_operation(
+        progress,
+        phase="rule",
+        step="rdf_generation",
+        message="Rule RDF generation",
+        completed_message="Rule RDF generated",
+    ):
+        output = run_data_rule_agent(
+            DataRuleAgentMode.RULE_GENERATION,
+            {
+                "scenario_rdf_turtle": scenario_turtle,
+                "source_document": source_document,
+                "validated_data_rdf": data_turtle,
+                "ontology_turtle": rule_ontology,
+                "ontology_hash": rule_ontology_hash,
+            },
+            model=model,
+            runner=runner,
+        )
     rule_turtle = _require_text(output.rule_rdf_turtle, "rule_rdf_turtle")
     initial_rule_turtle = rule_turtle
-    shacl_output = run_data_rule_agent(
-        DataRuleAgentMode.RULE_SHACL_GENERATION,
-        {
-            "rule_rdf_raw": rule_turtle,
-            "ontology_turtle": rule_ontology,
-            "ontology_hash": rule_ontology_hash,
-        },
-        model=model,
-        runner=runner,
-    )
+    with progress_operation(
+        progress,
+        phase="rule",
+        step="shacl_generation",
+        message="Rule SHACL generation",
+        completed_message="Rule SHACL generated",
+    ):
+        shacl_output = run_data_rule_agent(
+            DataRuleAgentMode.RULE_SHACL_GENERATION,
+            {
+                "rule_rdf_raw": rule_turtle,
+                "ontology_turtle": rule_ontology,
+                "ontology_hash": rule_ontology_hash,
+            },
+            model=model,
+            runner=runner,
+        )
     rule_shapes = _require_text(
         shacl_output.rule_shacl_turtle,
         "rule_shacl_turtle",
@@ -373,11 +448,31 @@ def _generate_and_revise_rule(
         additional_data_turtle=data_turtle,
         iteration=0,
     )
+    report_progress(
+        progress,
+        phase="rule",
+        step="shacl_validation",
+        status=ProgressStatus.PASSED if validation.conforms else ProgressStatus.FAILED,
+        message=(
+            "Rule SHACL validation passed"
+            if validation.conforms
+            else "Rule SHACL validation found violations"
+        ),
+    )
     final_output = output
 
     for iteration in range(1, max_iterations + 1):
         if validation.conforms:
             break
+        report_progress(
+            progress,
+            phase="rule",
+            step="shacl_revision",
+            status=ProgressStatus.REVISION,
+            message="Rule SHACL revision",
+            iteration=iteration,
+            max_iterations=max_iterations,
+        )
         _assert_fixed_resources(
             rule_ontology,
             rule_shapes,
@@ -411,6 +506,23 @@ def _generate_and_revise_rule(
             rdf_kind=RdfKind.RULE,
             additional_data_turtle=data_turtle,
             iteration=iteration,
+        )
+        report_progress(
+            progress,
+            phase="rule",
+            step="shacl_validation",
+            status=(
+                ProgressStatus.PASSED
+                if validation.conforms
+                else ProgressStatus.FAILED
+            ),
+            message=(
+                "Rule SHACL validation passed"
+                if validation.conforms
+                else "Rule SHACL violations remain"
+            ),
+            iteration=iteration,
+            max_iterations=max_iterations,
         )
         final_output = output
         rule_history.append(
@@ -504,6 +616,8 @@ def _generate_and_revise_rule(
             validate_rdf=validate_revised_rdf,
             serialize_validation=_validation_payload,
             assert_fixed_resources=assert_fixed_resources,
+            progress=progress,
+            phase="rule",
         )
     )
     if revision_output is not None:
@@ -533,17 +647,27 @@ def run_data_rule_pipeline(
     runner: Callable[..., Any] | None = None,
     data_ontology_file: Path | str = DEFAULT_DATA_ONTOLOGY,
     rule_ontology_file: Path | str = DEFAULT_RULE_ONTOLOGY,
+    progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Generate Data/Rule RDF and one immutable SHACL graph for each RDF."""
 
     scenario_path = Path(scenario_file)
     data_rule_dir = Path(output_dir)
     data_rule_dir.mkdir(parents=True, exist_ok=True)
+    if progress is not None:
+        progress.phase(3, 6, "Data RDF", "data")
     (data_rule_dir / "data_shapes_generated.ttl").unlink(missing_ok=True)
     (data_rule_dir / "rule_shapes_generated.ttl").unlink(missing_ok=True)
     scenario_turtle = load_scenario_rdf(scenario_path)
     pdf_path = Path(pdf_file)
-    source_document = load_pdf_document(pdf_path)
+    with progress_operation(
+        progress,
+        phase="data",
+        step="pdf_text_extraction",
+        message="Data/Rule source document loading",
+        completed_message="Data/Rule source document loaded",
+    ):
+        source_document = load_pdf_document(pdf_path)
     source_document_payload = source_document.model_dump(
         mode="json",
         exclude={"text"},
@@ -578,6 +702,7 @@ def run_data_rule_pipeline(
         output_dir=data_rule_dir,
         max_iterations=max_data_iterations,
         max_self_review_iterations=max_data_self_review_iterations,
+        progress=progress,
     )
     write_text(data_rule_dir / "data_final.ttl", data_turtle)
     write_json(data_rule_dir / "data_validation.json", _validation_payload(data_validation))
@@ -586,6 +711,19 @@ def run_data_rule_pipeline(
         data_rule_dir / "data_self_review.json",
         data_self_review.model_dump(mode="json"),
     )
+    report_progress(
+        progress,
+        phase="data",
+        step="phase",
+        status=(
+            ProgressStatus.COMPLETED
+            if data_self_review.status is SelfReviewRunStatus.PASSED
+            else ProgressStatus.WARNING
+        ),
+        message="Data completed",
+    )
+    if progress is not None:
+        progress.phase(4, 6, "Rule RDF", "rule")
 
     (
         initial_rule_turtle,
@@ -608,6 +746,7 @@ def run_data_rule_pipeline(
         output_dir=data_rule_dir,
         max_iterations=max_rule_iterations,
         max_self_review_iterations=max_rule_self_review_iterations,
+        progress=progress,
     )
     write_text(data_rule_dir / "rule_final.ttl", rule_turtle)
     write_json(data_rule_dir / "rule_validation.json", _validation_payload(rule_validation))
@@ -615,6 +754,17 @@ def run_data_rule_pipeline(
     write_json(
         data_rule_dir / "rule_self_review.json",
         rule_self_review.model_dump(mode="json"),
+    )
+    report_progress(
+        progress,
+        phase="rule",
+        step="phase",
+        status=(
+            ProgressStatus.COMPLETED
+            if rule_self_review.status is SelfReviewRunStatus.PASSED
+            else ProgressStatus.WARNING
+        ),
+        message="Rule completed",
     )
 
     final_status = (

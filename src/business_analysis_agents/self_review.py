@@ -15,6 +15,12 @@ from business_analysis_agents.models import (
     WorkflowRdfValidationResult,
 )
 from business_analysis_agents.rdf_validation import content_hash
+from business_analysis_agents.progress import (
+    ProgressReporter,
+    ProgressStatus,
+    progress_operation,
+    report_progress,
+)
 
 
 ReviewRdf = Callable[[str, int], SelfReviewResult]
@@ -61,6 +67,8 @@ def run_self_review_loop(
     validate_rdf: ValidateRdf,
     serialize_validation: SerializeValidation,
     assert_fixed_resources: Callable[[], None],
+    progress: ProgressReporter | None = None,
+    phase: str | None = None,
 ) -> tuple[
     str,
     WorkflowRdfValidationResult,
@@ -75,8 +83,16 @@ def run_self_review_loop(
     last_result: SelfReviewResult | None = None
     last_revision_output: Any | None = None
     revision_count = 0
+    progress_phase = phase or rdf_kind.value
 
     if not validation.conforms:
+        report_progress(
+            progress,
+            phase=progress_phase,
+            step="self_review",
+            status=ProgressStatus.WARNING,
+            message=f"{rdf_kind.value.title()} Self-Review skipped because SHACL failed",
+        )
         return (
             rdf_turtle,
             validation,
@@ -91,7 +107,14 @@ def run_self_review_loop(
     review_iteration = 0
     while validation.conforms:
         assert_fixed_resources()
-        result = review_rdf(rdf_turtle, review_iteration)
+        with progress_operation(
+            progress,
+            phase=progress_phase,
+            step="self_review",
+            message=f"{rdf_kind.value.title()} Self-Review",
+            completed_message=f"{rdf_kind.value.title()} Self-Review response received",
+        ):
+            result = review_rdf(rdf_turtle, review_iteration)
         validate_self_review_result(result, reviewer_agent, rdf_kind)
         last_result = result
         iteration_entry = SelfReviewIteration(
@@ -101,6 +124,13 @@ def run_self_review_loop(
         )
         iterations.append(iteration_entry)
         if result.passed:
+            report_progress(
+                progress,
+                phase=progress_phase,
+                step="self_review",
+                status=ProgressStatus.PASSED,
+                message=f"{rdf_kind.value.title()} Self-Review passed",
+            )
             return (
                 rdf_turtle,
                 validation,
@@ -113,21 +143,69 @@ def run_self_review_loop(
                 ),
                 last_revision_output,
             )
+        report_progress(
+            progress,
+            phase=progress_phase,
+            step="self_review",
+            status=ProgressStatus.FAILED,
+            message=(
+                f"{rdf_kind.value.title()} Self-Review found "
+                f"{len(result.findings)} issue(s)"
+            ),
+        )
         if revision_count >= max_revision_iterations:
+            report_progress(
+                progress,
+                phase=progress_phase,
+                step="self_review_revision",
+                status=ProgressStatus.WARNING,
+                message="Maximum Self-Review revision iterations reached",
+                iteration=revision_count,
+                max_iterations=max_revision_iterations,
+            )
             break
 
         while revision_count < max_revision_iterations:
             assert_fixed_resources()
             next_iteration = len(revision_history) + 1
-            rdf_turtle, output_payload, revision_output = revise_rdf(
-                rdf_turtle,
-                result,
-                validation,
-                next_iteration,
-            )
+            with progress_operation(
+                progress,
+                phase=progress_phase,
+                step="self_review_revision",
+                message=f"{rdf_kind.value.title()} Self-Review revision",
+                completed_message=(
+                    f"{rdf_kind.value.title()} Self-Review revision completed"
+                ),
+                iteration=revision_count + 1,
+                max_iterations=max_revision_iterations,
+                start_status=ProgressStatus.REVISION,
+            ):
+                rdf_turtle, output_payload, revision_output = revise_rdf(
+                    rdf_turtle,
+                    result,
+                    validation,
+                    next_iteration,
+                )
             revision_count += 1
             last_revision_output = revision_output
             validation = validate_rdf(rdf_turtle, next_iteration)
+            report_progress(
+                progress,
+                phase=progress_phase,
+                step="shacl_validation",
+                status=(
+                    ProgressStatus.PASSED
+                    if validation.conforms
+                    else ProgressStatus.FAILED
+                ),
+                message=(
+                    f"{rdf_kind.value.title()} SHACL validation passed"
+                    if validation.conforms
+                    else f"{rdf_kind.value.title()} SHACL violations remain"
+                ),
+                iteration=revision_count,
+                max_iterations=max_revision_iterations,
+            )
             revision_history.append(
                 {
                     "iteration": next_iteration,

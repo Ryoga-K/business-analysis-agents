@@ -30,6 +30,12 @@ from business_analysis_agents.rdf_validation import (
     validate_workflow_rdf,
     validation_feedback,
 )
+from business_analysis_agents.progress import (
+    ProgressReporter,
+    ProgressStatus,
+    progress_operation,
+    report_progress,
+)
 from business_analysis_agents.self_review import run_self_review_loop
 
 
@@ -143,6 +149,7 @@ def run_workflow_pipeline(
     runner: Callable[..., Any] | None = None,
     ontology_file: Path | str = DEFAULT_WORKFLOW_ONTOLOGY,
     save_debug_outputs: bool = False,
+    progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Run Workflow RDF generation and save final artifacts."""
 
@@ -153,7 +160,14 @@ def run_workflow_pipeline(
     generated_shapes_path.unlink(missing_ok=True)
     scenario_turtle = load_scenario_rdf(scenario_path)
     pdf_path = Path(pdf_file)
-    source_document = load_pdf_document(pdf_path)
+    with progress_operation(
+        progress,
+        phase="workflow",
+        step="pdf_text_extraction",
+        message="Workflow source document loading",
+        completed_message="Workflow source document loaded",
+    ):
+        source_document = load_pdf_document(pdf_path)
     source_document_payload = source_document.model_dump(
         mode="json",
         exclude={"text"},
@@ -165,31 +179,45 @@ def run_workflow_pipeline(
     )
     ontology_hash = content_hash(ontology_turtle)
 
-    generation_output = run_workflow_agent(
-        WorkflowAgentMode.WORKFLOW_GENERATION,
-        {
-            "scenario_rdf_turtle": scenario_turtle,
-            "source_document": source_document_payload,
-            "ontology_turtle": ontology_turtle,
-            "ontology_hash": ontology_hash,
-        },
-        model=model,
-        runner=runner,
-    )
+    with progress_operation(
+        progress,
+        phase="workflow",
+        step="rdf_generation",
+        message="Workflow RDF generation",
+        completed_message="Workflow RDF generated",
+    ):
+        generation_output = run_workflow_agent(
+            WorkflowAgentMode.WORKFLOW_GENERATION,
+            {
+                "scenario_rdf_turtle": scenario_turtle,
+                "source_document": source_document_payload,
+                "ontology_turtle": ontology_turtle,
+                "ontology_hash": ontology_hash,
+            },
+            model=model,
+            runner=runner,
+        )
     workflow_turtle = _require_text(
         generation_output.workflow_rdf_turtle,
         "workflow_rdf_turtle",
     )
-    shacl_output = run_workflow_agent(
-        WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
-        {
-            "workflow_rdf_raw": workflow_turtle,
-            "ontology_turtle": ontology_turtle,
-            "ontology_hash": ontology_hash,
-        },
-        model=model,
-        runner=runner,
-    )
+    with progress_operation(
+        progress,
+        phase="workflow",
+        step="shacl_generation",
+        message="Workflow SHACL generation",
+        completed_message="Workflow SHACL generated",
+    ):
+        shacl_output = run_workflow_agent(
+            WorkflowAgentMode.WORKFLOW_SHACL_GENERATION,
+            {
+                "workflow_rdf_raw": workflow_turtle,
+                "ontology_turtle": ontology_turtle,
+                "ontology_hash": ontology_hash,
+            },
+            model=model,
+            runner=runner,
+        )
     shacl_turtle = _require_text(
         shacl_output.workflow_shacl_turtle,
         "workflow_shacl_turtle",
@@ -235,12 +263,34 @@ def run_workflow_pipeline(
         shacl_turtle,
         iteration=0,
     )
+    report_progress(
+        progress,
+        phase="workflow",
+        step="shacl_validation",
+        status=(
+            ProgressStatus.PASSED if validation.conforms else ProgressStatus.FAILED
+        ),
+        message=(
+            "Workflow SHACL validation passed"
+            if validation.conforms
+            else "Workflow SHACL validation found violations"
+        ),
+    )
     final_output = generation_output
 
     for iteration in range(1, max_workflow_iterations + 1):
         if validation.conforms:
             break
 
+        report_progress(
+            progress,
+            phase="workflow",
+            step="shacl_revision",
+            status=ProgressStatus.REVISION,
+            message="Workflow SHACL revision",
+            iteration=iteration,
+            max_iterations=max_workflow_iterations,
+        )
         _assert_fixed_hashes(ontology_turtle, shacl_turtle, ontology_hash, shapes_hash)
         revision_output = run_workflow_agent(
             WorkflowAgentMode.WORKFLOW_REVISION,
@@ -268,6 +318,23 @@ def run_workflow_pipeline(
             ontology_turtle,
             shacl_turtle,
             iteration=iteration,
+        )
+        report_progress(
+            progress,
+            phase="workflow",
+            step="shacl_validation",
+            status=(
+                ProgressStatus.PASSED
+                if validation.conforms
+                else ProgressStatus.FAILED
+            ),
+            message=(
+                "Workflow SHACL validation passed"
+                if validation.conforms
+                else "Workflow SHACL violations remain"
+            ),
+            iteration=iteration,
+            max_iterations=max_workflow_iterations,
         )
         final_output = revision_output
         revision_history.append(
@@ -364,6 +431,8 @@ def run_workflow_pipeline(
         validate_rdf=validate_revised_rdf,
         serialize_validation=_validation_payload,
         assert_fixed_resources=assert_fixed_resources,
+        progress=progress,
+        phase="workflow",
     )
     if self_review_revision_output is not None:
         final_output = self_review_revision_output
@@ -374,6 +443,14 @@ def run_workflow_pipeline(
         and self_review_history.status is SelfReviewRunStatus.PASSED
         else "needs_review"
     )
+    if final_status != "completed":
+        report_progress(
+            progress,
+            phase="workflow",
+            step="phase",
+            status=ProgressStatus.WARNING,
+            message="Workflow ended with unresolved validation or Self-Review findings",
+        )
     if not save_debug_outputs:
         _remove_debug_outputs(workflow_dir)
     write_text(workflow_dir / "workflow_final.ttl", workflow_turtle)
