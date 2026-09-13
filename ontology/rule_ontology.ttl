@@ -2,46 +2,31 @@
 @prefix schema: <https://schema.org/> .
 @prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix owl:    <http://www.w3.org/2002/07/owl#> .
-@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
-
-
-#################################################################
-# Ontology
-#################################################################
-
-<http://example.org/ontology/rule>
-    a owl:Ontology ;
-    rdfs:label "Rule RDF Vocabulary Subset"@en ;
-    rdfs:seeAlso <http://www.w3.org/ns/prov#> ,
-                 <https://schema.org/> .
-
 
 #################################################################
 # PROV-O Classes
 #################################################################
 
 prov:Activity
-    a owl:Class ;
-    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    a rdfs:Class ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov#> ;
     rdfs:label "Activity" ;
-    owl:disjointWith prov:Entity ;
     prov:definition
         "An activity is something that occurs over a period of time and acts upon or with entities; it may include consuming, processing, transforming, modifying, relocating, using, or generating entities." .
 
 prov:Entity
-    a owl:Class ;
-    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    a rdfs:Class ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov#> ;
     rdfs:label "Entity" ;
     prov:definition
-        "An entity is a physical, digital, conceptual, or other kind of thing with some fixed aspects; entities may be real or imaginary. "@en .
+        "An entity is a physical, digital, conceptual, or other kind of thing with some fixed aspects; entities may be real or imaginary."@en .
 
 prov:Agent
-    a owl:Class ;
-    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    a rdfs:Class ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov#> ;
     rdfs:label "Agent" ;
     prov:definition
-        "An agent is something that bears some form of responsibility for an activity taking place, for the existence of an entity, or for another agent's activity. "@en .
+        "An agent is something that bears some form of responsibility for an activity taking place, for the existence of an entity, or for another agent's activity."@en .
 
 
 #################################################################
@@ -49,45 +34,45 @@ prov:Agent
 #################################################################
 
 prov:used
-    a owl:ObjectProperty ;
+    a rdf:Property ;
     rdfs:comment
         "A prov:Entity that was used by this prov:Activity. For example, :baking prov:used :spoon, :egg, :oven ."@en ;
     rdfs:domain prov:Activity ;
     rdfs:range prov:Entity ;
-    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov#> ;
     rdfs:label "used" .
 
 prov:wasGeneratedBy
-    a owl:ObjectProperty ;
+    a rdf:Property ;
     rdfs:domain prov:Entity ;
     rdfs:range prov:Activity ;
-    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov#> ;
     rdfs:label "wasGeneratedBy" .
 
 prov:wasDerivedFrom
-    a owl:ObjectProperty ;
+    a rdf:Property ;
     rdfs:comment
         "The more specific subproperties of prov:wasDerivedFrom (i.e., prov:wasQuotedFrom, prov:wasRevisionOf, prov:hadPrimarySource) should be used when applicable."@en ;
     rdfs:domain prov:Entity ;
     rdfs:range prov:Entity ;
-    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov#> ;
     rdfs:label "wasDerivedFrom" ;
     prov:definition
         "A derivation is a transformation of an entity into another, an update of an entity resulting in a new one, or the construction of a new entity based on a pre-existing entity."@en .
 
 prov:wasAssociatedWith
-    a owl:ObjectProperty ;
+    a rdf:Property ;
     rdfs:comment
-        "An prov:Agent that had some (unspecified) responsibility for the occurrence of this prov:Activity."@en ;
+        "A prov:Agent that had some (unspecified) responsibility for the occurrence of this prov:Activity."@en ;
     rdfs:domain prov:Activity ;
     rdfs:range prov:Agent ;
-    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov#> ;
     rdfs:label "wasAssociatedWith" .
 
 prov:value
-    a owl:DatatypeProperty ;
+    a rdf:Property ;
     rdfs:domain prov:Entity ;
-    rdfs:isDefinedBy <http://www.w3.org/ns/prov-o#> ;
+    rdfs:isDefinedBy <http://www.w3.org/ns/prov#> ;
     rdfs:label "value" ;
     prov:definition
         "Provides a value that is a direct representation of an entity."@en .

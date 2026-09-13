@@ -1,52 +1,79 @@
-@prefix dcterms: <http://purl.org/dc/terms/> .
-@prefix dcmitype: <http://purl.org/dc/dcmitype/> .
-@prefix prov: <http://www.w3.org/ns/prov#> .
-@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
-@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rhp:      <http://jazz.net/ns/dm/rhapsody/uml#> .
+@prefix rsa_uml:  <http://jazz.net/ns/dm/rsa/uml#> .
+@prefix dcterms:  <http://purl.org/dc/terms/> .
+@prefix rdf:      <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:     <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:      <http://www.w3.org/2001/XMLSchema#> .
+@prefix vs:       <http://www.w3.org/2003/06/sw-vocab-status/ns#> .
 
-<http://example.org/ontology/scenario>
-    a owl:Ontology ;
-    rdfs:label "Scenario RDF Vocabulary Subset"@en .
+# ----------------------------------------------------------------------
+# Rhapsody UML Vocabulary
+# ----------------------------------------------------------------------
 
+rhp:Classifier
+      a rdfs:Class ;
+      rdfs:comment "Classifier is a sub-class of IUnit" ;
+      rdfs:isDefinedBy rhp: ;
+      rdfs:label "Classifier" ;
+      vs:term_status "stable" .
 
-# ============================================================
-# Classes
-# ============================================================
+rhp:Actor
+      a rdfs:Class ;
+      rdfs:comment "Actor is a sub-class of Class" ;
+      rdfs:isDefinedBy rhp: ;
+      rdfs:label "Actor" ;
+      vs:term_status "stable" .
 
-prov:Agent
-    a owl:Class ;
-    rdfs:label "Agent"@en .
+rhp:UseCase
+      a rdfs:Class ;
+      rdfs:comment "UseCase is a sub-class of Class" ;
+      rdfs:isDefinedBy rhp: ;
+      rdfs:label "UseCase" ;
+      vs:term_status "stable" .
 
-prov:Activity
-    a owl:Class ;
-    rdfs:label "Activity"@en .
+rhp:AssociationEnd
+      a rdfs:Class ;
+      rdfs:comment "AssociationEnd is a sub-class of relation" ;
+      rdfs:isDefinedBy rhp: ;
+      rdfs:label "AssociationEnd" ;
+      vs:term_status "stable" .
 
-dcmitype:Collection
-    a rdfs:Class ;
-    rdfs:label "Collection"@en .
+rhp:classifier-associationEnds
+      a rdf:Property ;
+      rdfs:comment "AssociationEnds is a container of relation types owned by Classifier" ;
+      rdfs:isDefinedBy rhp: ;
+      rdfs:label "AssociationEnds in Classifier" ;
+      vs:term_status "stable" .
 
+rhp:relation-otherClass
+      a rdf:Property ;
+      rdfs:comment "OtherClass is one to many  relation from relation to Classifier" ;
+      rdfs:isDefinedBy rhp: ;
+      rdfs:label "OtherClass in relation" ;
+      vs:term_status "stable" .
 
-# ============================================================
-# Properties
-# ============================================================
+# ----------------------------------------------------------------------
+# RSA UML Vocabulary
+# Used only for the Subject (Classifier) -> UseCase ownership relation.
+# ----------------------------------------------------------------------
+
+rsa_uml:ownedUseCase-Classifier
+      a rdf:Property ;
+      rdfs:comment "References the use cases owned by this classifier."^^xsd:string ;
+      rdfs:isDefinedBy rsa_uml: ;
+      rdfs:label "ownedUseCase"^^xsd:string .
+
+# ----------------------------------------------------------------------
+# Dublin Core Terms
+# These existing properties are used for names and descriptions.
+# They are minimally identified here so that they are visible in this
+# fixed vocabulary subset without redefining their semantics.
+# ----------------------------------------------------------------------
 
 dcterms:title
-    a rdf:Property ;
-    rdfs:label "Title"@en ;
-    rdfs:range rdfs:Literal .
+      a rdf:Property ;
+      rdfs:isDefinedBy <http://purl.org/dc/terms/> .
 
 dcterms:description
-    a rdf:Property ;
-    rdfs:label "Description"@en .
-
-dcterms:hasPart
-    a rdf:Property ;
-    rdfs:label "Has Part"@en .
-
-prov:wasAssociatedWith
-    a owl:ObjectProperty ;
-    rdfs:label "wasAssociatedWith"@en ;
-    rdfs:domain prov:Activity ;
-    rdfs:range prov:Agent ;
-    rdfs:subPropertyOf prov:wasInfluencedBy .
+      a rdf:Property ;
+      rdfs:isDefinedBy <http://purl.org/dc/terms/> .
