@@ -734,6 +734,74 @@ def test_run_subcommand_uses_fixed_revision_limit(
     assert "Human Review: needs_revision" in output
 
 
+@pytest.mark.parametrize(
+    ("command", "pipeline_name"),
+    [
+        ("workflow", "run_workflow_pipeline"),
+        ("data-rule", "run_data_rule_pipeline"),
+    ],
+)
+@pytest.mark.parametrize("progress_enabled", [False, True])
+def test_individual_cli_optionally_passes_progress_reporter(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    command,
+    pipeline_name,
+    progress_enabled,
+) -> None:
+    """Individual RDF CLIs enable existing progress reporting only on request."""
+
+    received = {}
+
+    def fake_pipeline(**kwargs):
+        received.update(kwargs)
+        progress = kwargs["progress"]
+        if progress is not None:
+            progress.report(
+                phase=command,
+                step="test",
+                status=controller.ProgressStatus.RUNNING,
+                message=f"{command} detailed progress",
+            )
+        return {"output_dir": kwargs["output_dir"], "final_status": "completed"}
+
+    monkeypatch.setattr(controller, pipeline_name, fake_pipeline)
+    output_dir = tmp_path / command
+    args = [
+        command,
+        "--pdf",
+        "sample.pdf",
+        "--scenario",
+        "scenario_final.ttl",
+        "--output-dir",
+        str(output_dir),
+    ]
+    if progress_enabled:
+        args.append("--progress")
+
+    assert controller.run(args) == 0
+
+    progress = received["progress"]
+    if progress_enabled:
+        assert isinstance(progress, controller.ProgressReporter)
+        assert progress.log_file == output_dir / "progress.jsonl"
+        assert progress.log_file.exists()
+    else:
+        assert progress is None
+        assert not (output_dir / "progress.jsonl").exists()
+
+    output = capsys.readouterr().out
+    assert (f"[RUN] {command} detailed progress" in output) is progress_enabled
+
+    parser = (
+        controller.build_workflow_parser()
+        if command == "workflow"
+        else controller.build_data_rule_parser()
+    )
+    assert "--progress" in parser.format_help()
+
+
 def test_consistency_revision_loop_groups_targets_and_reuses_cross_shacl(
     monkeypatch,
     tmp_path,

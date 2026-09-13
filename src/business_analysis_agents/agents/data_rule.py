@@ -66,9 +66,15 @@ Data RDFの構造的妥当性を検証するSHACL Shapesを生成してくださ
 ルール:
 - data_shacl_turtleに、単独でRDFLibによりparse可能な完全なTurtle文字列を出力してください。
 - TurtleをMarkdownコードフェンスで囲まないでください。
-- 出力内で使用するすべてのprefixを、Turtle内で必ず宣言してください。
+- 出力Turtleの先頭には、以下のprefix宣言を必ずそのまま含めてください。
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+  @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+- 上記prefixは使用しないものがあっても省略しないでください。
+- 上記以外のprefixを使用する場合は、そのprefixもTurtle内で必ず宣言してください。
 - 宣言されていないprefixは使用しないでください。
-- 出力前に、使用したprefixがすべて宣言済みであり、Turtleとして構文的に完結していることを確認してください。
+- 出力前に、Turtleとして構文的に完結していることを確認してください。
 
 - SHACL標準語彙と、固定Ontology内でClassまたはPropertyとして明示的に定義されている語彙だけをSHACL制約に使用してください。
 - sh:targetClass、sh:classには、固定Ontology内でrdfs:Classまたはowl:Classとして明示的に定義されたURIだけを使用してください。
@@ -157,9 +163,15 @@ Rule RDFの構造的妥当性を検証するSHACL Shapesを生成してくださ
 ルール:
 - rule_shacl_turtleに、単独でRDFLibによりparse可能な完全なTurtle文字列を出力してください。
 - TurtleをMarkdownコードフェンスで囲まないでください。
-- 出力内で使用するすべてのprefixを、Turtle内で必ず宣言してください。
+- 出力Turtleの先頭には、以下のprefix宣言を必ずそのまま含めてください。
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+  @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+- 上記prefixは使用しないものがあっても省略しないでください。
+- 上記以外のprefixを使用する場合は、そのprefixもTurtle内で必ず宣言してください。
 - 宣言されていないprefixは使用しないでください。
-- 出力前に、使用したprefixがすべて宣言済みであり、Turtleとして構文的に完結していることを確認してください。
+- 出力前に、Turtleとして構文的に完結していることを確認してください。
 
 - SHACL標準語彙と、固定Ontology内でClassまたはPropertyとして明示的に定義されている語彙だけをSHACL制約に使用してください。
 - sh:targetClass、sh:classには、固定Ontology内でrdfs:Classまたはowl:Classとして明示的に定義されたURIだけを使用してください。

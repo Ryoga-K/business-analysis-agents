@@ -1581,6 +1581,11 @@ def build_workflow_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Save ontology, SHACL, agent output, and run metadata artifacts.",
     )
+    workflow_parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Show detailed progress and save progress.jsonl in the output directory.",
+    )
     return workflow_parser
 
 
@@ -1615,6 +1620,11 @@ def build_data_rule_parser() -> argparse.ArgumentParser:
         "--rule-ontology",
         default=str(DEFAULT_RULE_ONTOLOGY),
         help="Rule ontology Turtle file.",
+    )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Show detailed progress and save progress.jsonl in the output directory.",
     )
     return parser
 
@@ -1766,6 +1776,11 @@ def run(argv: Sequence[str] | None = None) -> int:
 
     if raw_args[:1] == ["workflow"]:
         args = build_workflow_parser().parse_args(raw_args[1:])
+        progress = (
+            ProgressReporter(log_file=Path(args.output_dir) / "progress.jsonl")
+            if args.progress
+            else None
+        )
         try:
             result = run_workflow_pipeline(
                 scenario_file=args.scenario,
@@ -1774,6 +1789,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 output_dir=args.output_dir,
                 ontology_file=args.ontology,
                 save_debug_outputs=args.save_debug_outputs,
+                progress=progress,
             )
         except WorkflowMissingOpenAIAPIKeyError as error:
             print(f"エラー: {error}")
@@ -1788,6 +1804,11 @@ def run(argv: Sequence[str] | None = None) -> int:
 
     if raw_args[:1] == ["data-rule"]:
         args = build_data_rule_parser().parse_args(raw_args[1:])
+        progress = (
+            ProgressReporter(log_file=Path(args.output_dir) / "progress.jsonl")
+            if args.progress
+            else None
+        )
         try:
             result = run_data_rule_pipeline(
                 scenario_file=args.scenario,
@@ -1796,6 +1817,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 output_dir=args.output_dir,
                 data_ontology_file=args.data_ontology,
                 rule_ontology_file=args.rule_ontology,
+                progress=progress,
             )
         except DataRuleMissingOpenAIAPIKeyError as error:
             print(f"エラー: {error}")

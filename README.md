@@ -211,6 +211,15 @@ outputs/scenario/scenario_final.ttl
 python -m business_analysis_agents workflow --pdf inputs\sample.pdf --scenario outputs\scenario\scenario_final.ttl
 ```
 
+詳細な進捗をCLIに表示し、`outputs/workflow/progress.jsonl`へ保存する場合:
+
+```powershell
+python -m business_analysis_agents workflow `
+  --pdf inputs\sample.pdf `
+  --scenario outputs\scenario\scenario_final.ttl `
+  --progress
+```
+
 デフォルト以外のWorkflow ontologyを使用する場合:
 
 ```powershell
@@ -249,6 +258,15 @@ python -m business_analysis_agents workflow `
 
 ```powershell
 python -m business_analysis_agents data-rule --pdf inputs\sample.pdf --scenario outputs\scenario\scenario_final.ttl
+```
+
+Data / Rule両方の詳細な進捗をCLIに表示し、`outputs/data_rule/progress.jsonl`へ保存する場合:
+
+```powershell
+python -m business_analysis_agents data-rule `
+  --pdf inputs\sample.pdf `
+  --scenario outputs\scenario\scenario_final.ttl `
+  --progress
 ```
 
 デフォルト以外の固定TTLを使用する場合:
