@@ -23,7 +23,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - Python ControllerによるPDFからHuman Review後の最終RDF確定までのEnd-to-End実行
 - End-to-End実行のフェーズ・反復回数・API処理時間のCLI進捗表示とJSONLログ保存
 - RDF・必須成果物が利用不能なfatal failure時の後続停止と`run_summary.json`への実行結果保存
-- SHACL構造に基づくConsistency findingのグループレビューと構造化結果保存
+- SHACL構造に基づくConsistency findingの表示と、人間による明示的な最終承認・修正要求の保存
 - 実行結果のJSON / Turtle保存
 - APIを呼ばないモックpytest
 
@@ -42,7 +42,8 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - End-to-End ControllerはAI判断を行わず、既存pipelineを決められた順序で呼び出す。
 - Consistency不適合時は対象Agent別に指示を集約して自動revisionし、同じ個別SHACLとCross-SHACLで再検証する。
 - 最大Cross revision回数後も不適合の場合は実行エラーとせず、Human Reviewへ進む。
-- Human Reviewで修正が承認されたfindingは対象Agent単位に集約し、targeted revisionでRDFへ反映する。
+- Human ReviewはCross findingの有無にかかわらず明示入力を要求し、要修正時は対象Agent単位に集約してtargeted revisionでRDFへ反映する。
+- Workflow/Data/RuleのSelf-Review結果は各Agentの実行記録として保存するが、ControllerとHuman Reviewの品質判断には使用しない。
 - ontologyが存在しない場合は停止し、LLM生成へフォールバックしない。
 - SQL、DB、Web UIは現時点では使用しない。
 
@@ -141,9 +142,10 @@ PDF
              └─ Cross-SHACL validation + Consistency evaluation
                  ├─ violation: targeted RDF revision
                  │   └─ individual SHACL + Self-Review + Cross recheck
-                 └─ Human Review
-                     └─ targeted revision + individual recheck + Cross recheck
-                         └─ final RDF artifacts
+                 └─ Human Review（明示承認必須）
+                     ├─ approval → final RDF artifacts
+                     └─ revision request → targeted revision + Cross recheck
+                         └─ Human Reviewへ戻る
 ```
 
 主な出力:
@@ -167,7 +169,7 @@ PDF
 - `outputs/controller/run_summary.json`
 - `outputs/controller/progress.jsonl`
 
-WorkflowまたはData/Ruleの個別SHACL・Self-Reviewが未適合でも、必須RDFが存在してTurtleとしてparseでき、後続処理に必要な成果物を読み込める場合はwarningとしてCross Consistencyへ進みます。自動Cross revision後もConsistencyが`needs_revision`の場合はHuman Reviewへ進みます。RDF・必須成果物の欠損、Turtle parse不能、入力読込失敗など、後続処理が技術的に実行できない場合だけfatal failureとして停止します。
+Workflow/Data/Ruleは、各抽出pipeline内でSHACL・Self-Review・自己修正まで実行したRDFを完成出力としてControllerへ渡します。Self-Review結果は記録として保存しますが、Controllerの品質判定には使用しません。ControllerはCross Consistencyだけを品質判断の材料とし、RDF・必須成果物の欠損、Turtle parse不能、入力読込失敗など、後続処理が技術的に実行できない場合だけfatal failureとして停止します。
 
 E2E全体の`status`は、問題なく完了した`completed`、未解決事項を保持して最後まで完了した`completed_with_issues`、後続処理不能で停止した`fatal_failed`を区別します。`run_summary.json`にはRDF別のSHACL違反・Self-Review finding、Cross finding数、Human Review要否、fatal errorの有無を保存します。
 
@@ -343,9 +345,9 @@ python -m business_analysis_agents consistency `
 python -m business_analysis_agents human-review
 ```
 
-デフォルトでは既存のWorkflow/Data/Rule RDFと`outputs/consistency/consistency_evaluation.json`を読み込みます。findingは修正対象Agent、`resultPath`、SHACL constraint component、source shape、severityの組み合わせでグループ化します。自然言語の文章類似度は使用しません。
+デフォルトでは既存のWorkflow/Data/Rule RDFと`outputs/consistency/consistency_evaluation.json`を読み込みます。findingは修正対象Agent、`resultPath`、SHACL constraint component、source shape、severityの組み合わせでグループ化して表示します。自然言語の文章類似度は使用しません。
 
-各グループについて、一括で指摘を承認、現在のRDFを承認、補足情報を入力、個別に確認、保留から選択します。個別確認を選んだ場合だけ、従来どおりグループ内のfindingを1件ずつ表示します。
+Cross findingの有無にかかわらず、最後に人間が「承認」または「要修正」を明示入力します。Cross findingがある場合の要修正は、Consistencyが出力した対象Agentと修正指示を使用します。Cross findingがない場合の要修正は、人間が対象Agentと修正内容を入力します。
 
 出力:
 
@@ -410,27 +412,26 @@ Workflow/Data/Rule RDFと3つの固定Ontologyを入力し、次の2モードで
 
 RDFLibで3 RDFと3 Ontologyをそれぞれ統合してpySHACL検証します。現在の固定Ontologyと生成済みRDFには3 RDF間の直接URI参照がないため、名称類似だけを根拠とした対応付けは行いません。
 
-Controllerでは、違反分析を`workflow`、`data`、`rule`ごとに集約し、対象RDFにつき1回のrevisionを実行します。revision後は生成済みの個別SHACLで検証し、Self-Reviewを通過した場合だけCross検証へ戻します。Cross-SHACLは初回に1回だけ生成し、以後は初回ハッシュと一致する同じTTLを再利用します。各反復は`consistency_revision_history.json`へ保存します。
+Controllerでは、違反分析を`workflow`、`data`、`rule`ごとに集約し、対象RDFにつき1回のrevisionを実行します。revision後は生成済みの個別SHACLで検証してSelf-Reviewを記録し、利用可能なRDFをCross検証へ戻します。Controllerの品質判断にはCross Consistencyだけを使用します。Cross-SHACLは初回に1回だけ生成し、以後は初回ハッシュと一致する同じTTLを再利用します。各反復は`consistency_revision_history.json`へ保存します。
 
 ### Human Review
 
-E2E実行では、Human Reviewで「指摘を承認」または「補足情報を入力」と判断されたfindingを`target_agent`ごとに集約し、既存のtargeted revisionへ1回ずつ渡します。「現在のRDFを承認」は修正せず、「保留」は未解決として扱います。
+E2E実行では、Human Reviewで「要修正」が選択された指示を`target_agent`ごとに集約し、既存のtargeted revisionへ1回ずつ渡します。「承認」が明示入力された場合だけ最終成果物を確定します。
 
-Human Review revision後は、実行中に生成・固定した同じ個別SHACLで対象RDFを再検証し、Self-Reviewを実行します。未解決の品質問題が残ってもRDFが利用可能なら、同じCross-SHACLと保存済みハッシュを使ってCross Consistencyを1回再検証します。Human Reviewは繰り返しません。
+Human Review revision後は、既存targeted revision内で同じ個別SHACLによる再検証とSelf-Reviewを行い、同じCross-SHACLと保存済みハッシュを使ってCross Consistencyを再評価します。その後は必ずHuman Reviewへ戻り、明示承認または次の修正要求を受け付けます。Human Review revisionは共通の最大反復回数まで実行します。
 
 確定したScenario / Workflow / Data / Rule RDFは`outputs/final/`へ保存します。`final_summary.json`には、最終状態、各RDFのSHACL適合状態、Self-Review状態、Cross Consistency状態、Human Review revisionの有無、revision回数、最終RDFハッシュを記録します。
 
 最終状態は次のいずれかです。
 
-- `completed_without_human_revision`
+- `completed_after_human_approval`
 - `completed_after_human_revision`
 - `unresolved_after_human_review`
-- `individual_validation_failed_after_human_review`
 - `pipeline_failed`
 
-Human ReviewはAI Agentではなく対話式CLIです。Consistencyのviolationと解析結果を`violation_index`で対応付けた後、SHACLの構造化情報でグループ化します。Consistencyが適合している場合は入力を求めず、「確認事項なし」として正常終了します。
+Human ReviewはAI Agentではなく対話式CLIです。Consistencyのviolationと解析結果を`violation_index`で対応付けた後、SHACLの構造化情報でグループ化して表示します。Consistencyが適合している場合も、人間に最終成果物の承認または修正要求を必ず入力させます。
 
-`human_review.json`の`groups`には、グループキー、finding ID一覧、違反タイプ、対象Agent、共通原因、共通修正方針、対象リソース、グループ判断、元finding一覧を保存します。個別確認した場合だけ`individual_results`に個別判断を保存します。トップレベルの`findings`には一括判断を展開した結果も含め、将来の修正ループからfinding単位で利用できるようにしています。
+`human_review.json`には`input_received`、`final_decision`、`approved`、`revision_requested`、修正要求、レビュー回数、判断履歴を保存します。Cross findingとの対応は`groups`、`findings`、`source_finding_ids`で維持します。`run_summary.json`にも入力・承認・修正要求・修正後承認を区別して記録します。
 
 ## 検証
 

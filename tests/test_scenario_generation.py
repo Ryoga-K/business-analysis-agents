@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from rdflib import Graph, Namespace, RDF, RDFS
 
 from business_analysis_agents.agents import scenario as scenario_module
 from business_analysis_agents.agents.scenario import (
@@ -23,29 +24,40 @@ from business_analysis_agents.models import (
 
 
 ONTOLOGY_TTL = """
+@prefix rhp: <http://jazz.net/ns/dm/rhapsody/uml#> .
+@prefix rsa_uml: <http://jazz.net/ns/dm/rsa/uml#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
-@prefix dcmitype: <http://purl.org/dc/dcmitype/> .
-@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+rhp:Classifier a rdfs:Class .
+rhp:Actor a rdfs:Class .
+rhp:UseCase a rdfs:Class .
+rhp:AssociationEnd a rdfs:Class .
+rhp:classifier-associationEnds a rdf:Property .
+rhp:relation-otherClass a rdf:Property .
+rsa_uml:ownedUseCase-Classifier a rdf:Property .
+dcterms:title a rdf:Property .
+dcterms:description a rdf:Property .
 """.strip()
 
 SCENARIO_TTL = """
+@prefix rhp: <http://jazz.net/ns/dm/rhapsody/uml#> .
+@prefix rsa_uml: <http://jazz.net/ns/dm/rsa/uml#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
-@prefix dcmitype: <http://purl.org/dc/dcmitype/> .
-@prefix prov: <http://www.w3.org/ns/prov#> .
 @prefix inst: <http://example.org/scenario/instance/> .
 
-inst:order-subject
+inst:order-subject a rhp:Classifier ;
     dcterms:title "Order handling" ;
     dcterms:description "A clerk handles an order." ;
-    dcterms:hasPart inst:order-package .
+    rsa_uml:ownedUseCase-Classifier inst:check-order .
 
-inst:clerk a prov:Agent ; dcterms:title "Clerk" .
-inst:order-package a dcmitype:Collection ;
-    dcterms:title "Order processing" ;
-    dcterms:hasPart inst:check-order .
-inst:check-order a prov:Activity ;
+inst:clerk a rhp:Actor ; dcterms:title "Clerk" .
+inst:check-order a rhp:UseCase ;
     dcterms:title "Check order" ;
-    prov:wasAssociatedWith inst:clerk .
+    rhp:classifier-associationEnds inst:check-order-clerk .
+inst:check-order-clerk a rhp:AssociationEnd ;
+    rhp:relation-otherClass inst:clerk .
 """.strip()
 
 
@@ -83,20 +95,29 @@ class FakeDocument:
 
 
 def test_fixed_scenario_ontology_contains_required_vocabulary() -> None:
-    """The fixed Scenario Ontology contains every term required by the prompt."""
+    """The fixed ontology defines the classes and properties used by Scenario RDF."""
 
-    ontology = DEFAULT_SCENARIO_ONTOLOGY.read_text(encoding="utf-8")
+    graph = Graph().parse(DEFAULT_SCENARIO_ONTOLOGY, format="turtle")
+    rhp = Namespace("http://jazz.net/ns/dm/rhapsody/uml#")
+    rsa_uml = Namespace("http://jazz.net/ns/dm/rsa/uml#")
+    dcterms = Namespace("http://purl.org/dc/terms/")
 
-    for term in (
-        "dcterms:title",
-        "dcterms:description",
-        "dcterms:hasPart",
-        "dcmitype:Collection",
-        "prov:Agent",
-        "prov:Activity",
-        "prov:wasAssociatedWith",
+    for scenario_class in (
+        rhp.Classifier,
+        rhp.Actor,
+        rhp.UseCase,
+        rhp.AssociationEnd,
     ):
-        assert term in ontology
+        assert (scenario_class, RDF.type, RDFS.Class) in graph
+
+    for scenario_property in (
+        rhp["classifier-associationEnds"],
+        rhp["relation-otherClass"],
+        rsa_uml["ownedUseCase-Classifier"],
+        dcterms.title,
+        dcterms.description,
+    ):
+        assert (scenario_property, RDF.type, RDF.Property) in graph
 
 
 def test_load_pdf_pages_keeps_page_numbers(monkeypatch, tmp_path) -> None:
@@ -133,9 +154,15 @@ def test_run_scenario_agent_uses_structured_output(monkeypatch) -> None:
 
     def fake_runner(agent, prompt):
         assert agent.output_type.output_type is ScenarioAgentOutput
-        assert "推測しない" in agent.instructions
-        assert "Markdownコードフェンス" in agent.instructions
-        assert "Subjectにはrdf:typeを付与しない" in agent.instructions
+        instructions = agent.instructions
+        assert "推測" in instructions and "補完しない" in instructions
+        assert "完全なTurtle文字列" in instructions
+        assert "RDFLib" in instructions and "parse可能" in instructions
+        assert "Markdownコードフェンス" in instructions and "囲まない" in instructions
+        assert "固定Scenario Ontology" in instructions
+        assert "新しいClass・Propertyを作成しない" in instructions
+        assert "Actor、UseCase" in instructions
+        assert "固定Scenario Ontologyで定義された構造" in instructions
         assert ONTOLOGY_TTL in prompt
         assert "[page 1]" in prompt
         return SimpleNamespace(final_output=expected)

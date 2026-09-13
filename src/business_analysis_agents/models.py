@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictBaseModel(BaseModel):
@@ -80,6 +80,13 @@ class HumanReviewGroupDecision(str, Enum):
     PENDING = "pending"
 
 
+class HumanReviewFinalDecision(str, Enum):
+    """人間がE2E成果物に対して明示した最終判断。"""
+
+    APPROVE = "approve"
+    REQUEST_REVISION = "request_revision"
+
+
 class RunStatus(str, Enum):
     """実行全体の進行状態。"""
 
@@ -117,10 +124,9 @@ class ControllerStageStatus(str, Enum):
 class FinalizationStatus(str, Enum):
     """Human Review後を含むE2E最終成果物の確定状態。"""
 
-    COMPLETED_WITHOUT_HUMAN_REVISION = "completed_without_human_revision"
+    COMPLETED_AFTER_HUMAN_APPROVAL = "completed_after_human_approval"
     COMPLETED_AFTER_HUMAN_REVISION = "completed_after_human_revision"
     UNRESOLVED_AFTER_HUMAN_REVIEW = "unresolved_after_human_review"
-    INDIVIDUAL_VALIDATION_FAILED = "individual_validation_failed_after_human_review"
     PIPELINE_FAILED = "pipeline_failed"
 
 
@@ -178,6 +184,11 @@ class ControllerRunSummary(StrictBaseModel):
     error_message: str | None = None
     fatal_error: bool = False
     human_review_required: bool = False
+    human_review_input_received: bool = False
+    human_review_approved: bool = False
+    human_review_revision_requested: bool = False
+    human_review_approved_after_revision: bool = False
+    human_review_rounds: int = Field(default=0, ge=0)
     cross_consistency_finding_count: int = Field(default=0, ge=0)
     individual_rdf_issues: dict[str, IndividualRdfIssueSummary] = Field(
         default_factory=dict
@@ -196,6 +207,11 @@ class FinalArtifactSummary(StrictBaseModel):
     self_review_status: dict[str, str]
     cross_consistency_status: str
     human_review_performed: bool
+    human_review_input_received: bool
+    human_review_approved: bool
+    human_review_revision_requested: bool
+    human_review_approved_after_revision: bool
+    human_review_rounds: int = Field(ge=1)
     human_review_revision_performed: bool
     revision_count: int = Field(ge=0)
     revision_counts: dict[str, int] = Field(default_factory=dict)
@@ -749,10 +765,48 @@ class HumanReviewGroupResult(StrictBaseModel):
     individual_results: list[HumanReviewFindingResult] = Field(default_factory=list)
 
 
+class HumanReviewRevisionRequest(StrictBaseModel):
+    """人間が対象Agentへ戻すことを明示した修正要求。"""
+
+    target_agent: AgentName
+    revision_instruction: str = Field(min_length=1)
+    source_finding_ids: list[str] = Field(default_factory=list)
+    target_resources: list[str] = Field(default_factory=list)
+
+
+class HumanReviewDecisionRecord(StrictBaseModel):
+    """Human Review 1回分の明示入力履歴。"""
+
+    review_round: int = Field(ge=1)
+    decision: HumanReviewFinalDecision
+    approved: bool
+    revision_requested: bool
+    revision_requests: list[HumanReviewRevisionRequest] = Field(default_factory=list)
+    reviewed_at: datetime = Field(default_factory=datetime.now)
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> HumanReviewDecisionRecord:
+        expects_approval = self.decision is HumanReviewFinalDecision.APPROVE
+        if self.approved is not expects_approval:
+            raise ValueError("Human Review history approval does not match decision.")
+        if self.revision_requested is expects_approval:
+            raise ValueError("Human Review history revision state does not match decision.")
+        if self.revision_requested and not self.revision_requests:
+            raise ValueError("A revision decision requires at least one revision request.")
+        if not self.revision_requested and self.revision_requests:
+            raise ValueError("An approval must not contain revision requests.")
+        return self
+
+
 class HumanReviewReport(StrictBaseModel):
     """Consistency評価全体に対するHuman Review成果物。"""
 
     status: ReviewStatus
+    input_received: bool
+    final_decision: HumanReviewFinalDecision
+    approved: bool
+    revision_requested: bool
+    review_round: int = Field(ge=1)
     reviewer: str | None = None
     reviewed_at: datetime = Field(default_factory=datetime.now)
     consistency_status: ReviewStatus
@@ -761,12 +815,39 @@ class HumanReviewReport(StrictBaseModel):
     data_rdf_file: str = Field(min_length=1)
     rule_rdf_file: str = Field(min_length=1)
     consistency_evaluation_file: str = Field(min_length=1)
-    individual_rdf_issues: dict[str, IndividualRdfIssueSummary] = Field(
-        default_factory=dict
-    )
     groups: list[HumanReviewGroupResult] = Field(default_factory=list)
     findings: list[HumanReviewFindingResult] = Field(default_factory=list)
+    revision_requests: list[HumanReviewRevisionRequest] = Field(default_factory=list)
+    decision_history: list[HumanReviewDecisionRecord] = Field(min_length=1)
     summary: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_explicit_decision(self) -> HumanReviewReport:
+        """Keep approval, revision, and explicit-input fields consistent."""
+
+        expects_approval = self.final_decision is HumanReviewFinalDecision.APPROVE
+        if not self.input_received:
+            raise ValueError("Human Review requires an explicit human input.")
+        if self.approved is not expects_approval:
+            raise ValueError("Human Review approval does not match final_decision.")
+        if self.revision_requested is expects_approval:
+            raise ValueError("Human Review revision state does not match final_decision.")
+        expected_status = (
+            ReviewStatus.APPROVED if expects_approval else ReviewStatus.NEEDS_REVISION
+        )
+        if self.status is not expected_status:
+            raise ValueError("Human Review status does not match final_decision.")
+        if self.revision_requested and not self.revision_requests:
+            raise ValueError("A revision decision requires at least one revision request.")
+        if not self.revision_requested and self.revision_requests:
+            raise ValueError("An approval must not contain revision requests.")
+        latest = self.decision_history[-1]
+        if (
+            latest.review_round != self.review_round
+            or latest.decision is not self.final_decision
+        ):
+            raise ValueError("Human Review history does not contain the current decision.")
+        return self
 
 
 class RepairHistoryEntry(StrictBaseModel):

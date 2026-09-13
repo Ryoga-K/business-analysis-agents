@@ -7,15 +7,18 @@ from collections.abc import Callable
 from pathlib import Path
 
 from business_analysis_agents.models import (
+    AgentName,
     ConsistencyEvaluationResult,
     ConsistencyViolationAnalysis,
     HumanReviewDecision,
+    HumanReviewDecisionRecord,
+    HumanReviewFinalDecision,
     HumanReviewFindingReference,
     HumanReviewFindingResult,
     HumanReviewGroupDecision,
     HumanReviewGroupResult,
     HumanReviewReport,
-    IndividualRdfIssueSummary,
+    HumanReviewRevisionRequest,
     ReviewStatus,
     ShaclViolation,
 )
@@ -29,18 +32,14 @@ DEFAULT_CONSISTENCY_EVALUATION = Path(
 )
 DEFAULT_HUMAN_REVIEW_OUTPUT = Path("outputs/human_review/human_review.json")
 
-FINDING_DECISION_BY_INPUT = {
-    "1": HumanReviewDecision.APPROVE_FINDING,
-    "2": HumanReviewDecision.APPROVE_CURRENT_RDF,
-    "3": HumanReviewDecision.PROVIDE_CONTEXT,
-    "4": HumanReviewDecision.PENDING,
+FINAL_DECISION_BY_INPUT = {
+    "1": HumanReviewFinalDecision.APPROVE,
+    "2": HumanReviewFinalDecision.REQUEST_REVISION,
 }
-GROUP_DECISION_BY_INPUT = {
-    "1": HumanReviewGroupDecision.APPROVE_ALL_FINDINGS,
-    "2": HumanReviewGroupDecision.APPROVE_ALL_CURRENT_RDF,
-    "3": HumanReviewGroupDecision.PROVIDE_GROUP_CONTEXT,
-    "4": HumanReviewGroupDecision.REVIEW_INDIVIDUALLY,
-    "5": HumanReviewGroupDecision.PENDING,
+TARGET_AGENT_BY_INPUT = {
+    "1": AgentName.WORKFLOW,
+    "2": AgentName.DATA,
+    "3": AgentName.RULE,
 }
 
 FindingPair = tuple[int, ShaclViolation, ConsistencyViolationAnalysis]
@@ -137,53 +136,49 @@ def _request_comment(
         output_func("補足情報は空にできません。")
 
 
-def _request_decision(
+def _request_final_decision(
     input_func: Callable[[str], str],
     output_func: Callable[[str], None],
-) -> tuple[HumanReviewDecision, str | None]:
-    output_func("1. 指摘を承認")
-    output_func("2. 現在のRDFを承認")
-    output_func("3. 補足情報を入力")
-    output_func("4. 保留")
+    *,
+    has_findings: bool,
+) -> HumanReviewFinalDecision:
+    if has_findings:
+        output_func("1. 現在のRDFを承認")
+        output_func("2. 要修正")
+    else:
+        output_func("最終成果物として承認しますか？")
+        output_func("1. 承認")
+        output_func("2. 要修正")
     while True:
-        selected = _read_cli_input(input_func, "判断を選択してください [1-4]: ")
-        decision = FINDING_DECISION_BY_INPUT.get(selected)
+        selected = _read_cli_input(input_func, "判断を選択してください [1-2]: ")
+        decision = FINAL_DECISION_BY_INPUT.get(selected)
         if decision is not None:
+            return decision
+        output_func("1または2を入力してください。")
+
+
+def _request_manual_revision(
+    input_func: Callable[[str], str],
+    output_func: Callable[[str], None],
+) -> HumanReviewRevisionRequest:
+    output_func("修正対象Agentを選択してください。")
+    output_func("1. workflow")
+    output_func("2. data")
+    output_func("3. rule")
+    while True:
+        selected = _read_cli_input(input_func, "修正対象を選択してください [1-3]: ")
+        target = TARGET_AGENT_BY_INPUT.get(selected)
+        if target is not None:
             break
-        output_func("1から4の数字を入力してください。")
-
-    if decision is not HumanReviewDecision.PROVIDE_CONTEXT:
-        return decision, None
-
-    return decision, _request_comment(
+        output_func("1から3の数字を入力してください。")
+    instruction = _request_comment(
         input_func,
         output_func,
-        "補足情報を入力してください: ",
+        "修正内容を入力してください: ",
     )
-
-
-def _request_group_decision(
-    input_func: Callable[[str], str],
-    output_func: Callable[[str], None],
-) -> tuple[HumanReviewGroupDecision, str | None]:
-    output_func("1. グループ内の指摘をすべて承認")
-    output_func("2. グループ内の現在のRDFをすべて承認")
-    output_func("3. グループ全体に補足情報を入力")
-    output_func("4. 個別に確認")
-    output_func("5. 保留")
-    while True:
-        selected = _read_cli_input(input_func, "判断を選択してください [1-5]: ")
-        decision = GROUP_DECISION_BY_INPUT.get(selected)
-        if decision is not None:
-            break
-        output_func("1から5の数字を入力してください。")
-
-    if decision is not HumanReviewGroupDecision.PROVIDE_GROUP_CONTEXT:
-        return decision, None
-    return decision, _request_comment(
-        input_func,
-        output_func,
-        "グループ全体の補足情報を入力してください: ",
+    return HumanReviewRevisionRequest(
+        target_agent=target,
+        revision_instruction=instruction,
     )
 
 
@@ -248,52 +243,6 @@ def _common_text(
     )
 
 
-def _display_finding(
-    reference: HumanReviewFindingReference,
-    display_index: int,
-    total: int,
-    output_func: Callable[[str], None],
-) -> None:
-    violation = reference.source_violation
-    analysis = reference.source_analysis
-    output_func("")
-    output_func(f"[{display_index}/{total}] {reference.finding_id}")
-    output_func(f"違反内容: {violation.message}")
-    output_func(f"対象リソース: {analysis.target_resource}")
-    output_func(f"原因: {analysis.cause}")
-    output_func(f"修正対象Agent: {analysis.target_agent.value}")
-    output_func(f"修正指示: {analysis.repair_instruction}")
-
-
-def _bulk_finding_decision(
-    decision: HumanReviewGroupDecision,
-) -> HumanReviewDecision:
-    mapping = {
-        HumanReviewGroupDecision.APPROVE_ALL_FINDINGS: (
-            HumanReviewDecision.APPROVE_FINDING
-        ),
-        HumanReviewGroupDecision.APPROVE_ALL_CURRENT_RDF: (
-            HumanReviewDecision.APPROVE_CURRENT_RDF
-        ),
-        HumanReviewGroupDecision.PROVIDE_GROUP_CONTEXT: (
-            HumanReviewDecision.PROVIDE_CONTEXT
-        ),
-        HumanReviewGroupDecision.PENDING: HumanReviewDecision.PENDING,
-    }
-    return mapping[decision]
-
-
-def _overall_status(
-    findings: list[HumanReviewFindingResult],
-) -> ReviewStatus:
-    decisions = {finding.decision for finding in findings}
-    if not decisions or decisions == {HumanReviewDecision.APPROVE_CURRENT_RDF}:
-        return ReviewStatus.APPROVED
-    if HumanReviewDecision.PENDING in decisions:
-        return ReviewStatus.UNKNOWN
-    return ReviewStatus.NEEDS_REVISION
-
-
 def run_human_review(
     workflow_file: Path | str = DEFAULT_WORKFLOW_RDF,
     data_file: Path | str = DEFAULT_DATA_RDF,
@@ -301,11 +250,12 @@ def run_human_review(
     consistency_evaluation_file: Path | str = DEFAULT_CONSISTENCY_EVALUATION,
     output_file: Path | str = DEFAULT_HUMAN_REVIEW_OUTPUT,
     reviewer: str | None = None,
-    individual_rdf_issues: dict[str, IndividualRdfIssueSummary] | None = None,
+    review_round: int = 1,
+    decision_history: list[HumanReviewDecisionRecord] | None = None,
     input_func: Callable[[str], str] | None = None,
     output_func: Callable[[str], None] | None = None,
 ) -> HumanReviewReport:
-    """Collect one human decision for every Consistency finding and save it."""
+    """Require an explicit final human decision for the current Cross result."""
 
     read_input = input_func or input
     write_output = output_func or print
@@ -327,31 +277,13 @@ def run_human_review(
     )
     finding_pairs = _validated_finding_pairs(evaluation)
     grouped_findings = group_consistency_findings(finding_pairs)
-    rdf_issues = individual_rdf_issues or {}
     group_results: list[HumanReviewGroupResult] = []
     findings: list[HumanReviewFindingResult] = []
-
-    unresolved_rdf_issues = [
-        issue for issue in rdf_issues.values() if issue.has_issues
-    ]
-    if unresolved_rdf_issues:
-        write_output("")
-        write_output("[Individual RDF issues]")
-        for issue in unresolved_rdf_issues:
-            write_output(
-                f"{issue.rdf_kind.value}: SHACL {issue.shacl_violation_count}, "
-                f"Self-Review {issue.self_review_finding_count}, "
-                f"status={issue.self_review_status}"
-            )
-            for violation in issue.shacl_violations:
-                write_output(f"- SHACL: {violation.get('message', 'violation')}")
-            for finding in issue.self_review_findings:
-                write_output(
-                    f"- Self-Review: {finding.get('description', 'finding')}"
-                )
+    group_contexts: list[dict[str, object]] = []
 
     if not grouped_findings:
-        write_output("確認事項なし")
+        write_output("Cross Consistency: passed")
+        write_output("不整合: 0件")
     for group_index, group in enumerate(grouped_findings, start=1):
         references = [_finding_reference(pair) for pair in group]
         first_violation = group[0][1]
@@ -383,76 +315,127 @@ def run_human_review(
 
         write_output("")
         write_output(f"[Group {group_index}/{len(grouped_findings)}] {group_id}")
+        write_output(f"問題内容: {first_violation.message}")
         write_output(f"違反タイプ: {violation_type}")
         write_output(f"修正対象Agent: {first_analysis.target_agent.value}")
         write_output(f"該当件数: {len(group)}件")
         write_output(f"共通原因: {common_cause}")
-        write_output(f"共通修正方針: {common_repair_policy}")
+        write_output(f"修正指示: {common_repair_policy}")
         write_output("対象例:")
         for resource in target_resources[:5]:
             write_output(f"- {resource}")
         if len(target_resources) > 5:
             write_output(f"- ... 他{len(target_resources) - 5}件")
-
-        group_decision, group_comment = _request_group_decision(
-            read_input,
-            write_output,
+        group_contexts.append(
+            {
+                "group_id": group_id,
+                "group_key": group_key,
+                "violation_type": violation_type,
+                "first_violation": first_violation,
+                "first_analysis": first_analysis,
+                "common_cause": common_cause,
+                "common_repair_policy": common_repair_policy,
+                "target_resources": target_resources,
+                "references": references,
+            }
         )
-        individual_results: list[HumanReviewFindingResult] = []
-        if group_decision is HumanReviewGroupDecision.REVIEW_INDIVIDUALLY:
-            for finding_index, reference in enumerate(references, start=1):
-                _display_finding(
-                    reference,
-                    finding_index,
-                    len(references),
-                    write_output,
-                )
-                decision, comment = _request_decision(read_input, write_output)
-                result = _finding_result(reference, decision, comment)
-                individual_results.append(result)
-                findings.append(result)
-        else:
-            finding_decision = _bulk_finding_decision(group_decision)
-            findings.extend(
-                _finding_result(reference, finding_decision, group_comment)
-                for reference in references
-            )
 
+    write_output("")
+    final_decision = _request_final_decision(
+        read_input,
+        write_output,
+        has_findings=bool(grouped_findings),
+    )
+    approved = final_decision is HumanReviewFinalDecision.APPROVE
+    revision_requested = not approved
+    revision_requests: list[HumanReviewRevisionRequest] = []
+
+    if revision_requested and grouped_findings:
+        requests_by_target: dict[AgentName, dict[str, list[str]]] = {}
+        for pair in finding_pairs:
+            reference = _finding_reference(pair)
+            analysis = reference.source_analysis
+            request = requests_by_target.setdefault(
+                analysis.target_agent,
+                {"instructions": [], "finding_ids": [], "resources": []},
+            )
+            if analysis.repair_instruction not in request["instructions"]:
+                request["instructions"].append(analysis.repair_instruction)
+            request["finding_ids"].append(reference.finding_id)
+            if reference.target_resource not in request["resources"]:
+                request["resources"].append(reference.target_resource)
+        revision_requests = [
+            HumanReviewRevisionRequest(
+                target_agent=target,
+                revision_instruction="\n".join(values["instructions"]),
+                source_finding_ids=values["finding_ids"],
+                target_resources=values["resources"],
+            )
+            for target, values in requests_by_target.items()
+        ]
+    elif revision_requested:
+        revision_requests = [_request_manual_revision(read_input, write_output)]
+
+    finding_decision = (
+        HumanReviewDecision.APPROVE_CURRENT_RDF
+        if approved
+        else HumanReviewDecision.APPROVE_FINDING
+    )
+    group_decision = (
+        HumanReviewGroupDecision.APPROVE_ALL_CURRENT_RDF
+        if approved
+        else HumanReviewGroupDecision.APPROVE_ALL_FINDINGS
+    )
+    for context in group_contexts:
+        references = context["references"]
+        assert isinstance(references, list)
+        findings.extend(
+            _finding_result(reference, finding_decision, None)
+            for reference in references
+        )
+        first_violation = context["first_violation"]
+        first_analysis = context["first_analysis"]
+        assert isinstance(first_violation, ShaclViolation)
+        assert isinstance(first_analysis, ConsistencyViolationAnalysis)
         group_results.append(
             HumanReviewGroupResult(
-                group_id=group_id,
-                group_key=group_key,
+                group_id=str(context["group_id"]),
+                group_key=str(context["group_key"]),
                 finding_ids=[reference.finding_id for reference in references],
-                violation_type=violation_type,
+                violation_type=str(context["violation_type"]),
                 target_agent=first_analysis.target_agent,
                 result_path=first_violation.path,
                 constraint_component=first_violation.constraint_component,
                 source_shape=first_violation.source_shape,
-                common_cause=common_cause,
-                common_repair_policy=common_repair_policy,
-                target_resources=target_resources,
+                common_cause=str(context["common_cause"]),
+                common_repair_policy=str(context["common_repair_policy"]),
+                target_resources=list(context["target_resources"]),
                 decision=group_decision,
-                supplemental_comment=group_comment,
-                individually_reviewed=(
-                    group_decision
-                    is HumanReviewGroupDecision.REVIEW_INDIVIDUALLY
-                ),
                 source_findings=references,
-                individual_results=individual_results,
             )
         )
 
-    status = _overall_status(findings)
+    status = ReviewStatus.APPROVED if approved else ReviewStatus.NEEDS_REVISION
+    current_record = HumanReviewDecisionRecord(
+        review_round=review_round,
+        decision=final_decision,
+        approved=approved,
+        revision_requested=revision_requested,
+        revision_requests=revision_requests,
+    )
+    history = [*(decision_history or []), current_record]
     summary = (
-        "確認事項なし"
-        if not findings
-        else (
-            f"{len(group_results)}グループ、{len(findings)}件の"
-            "Consistency findingをレビューしました。"
-        )
+        "人間が最終成果物を承認しました。"
+        if approved
+        else "人間がRDFの修正を要求しました。"
     )
     report = HumanReviewReport(
         status=status,
+        input_received=True,
+        final_decision=final_decision,
+        approved=approved,
+        revision_requested=revision_requested,
+        review_round=review_round,
         reviewer=reviewer,
         consistency_status=evaluation.status,
         consistency_conforms=evaluation.conforms,
@@ -460,9 +443,10 @@ def run_human_review(
         data_rdf_file=str(data_path),
         rule_rdf_file=str(rule_path),
         consistency_evaluation_file=str(evaluation_path),
-        individual_rdf_issues=rdf_issues,
         groups=group_results,
         findings=findings,
+        revision_requests=revision_requests,
+        decision_history=history,
         summary=summary,
     )
     destination.parent.mkdir(parents=True, exist_ok=True)

@@ -12,8 +12,9 @@ from business_analysis_agents.models import (
     ConsistencyEvaluationResult,
     ConsistencyViolationAnalysis,
     HumanReviewDecision,
+    HumanReviewFinalDecision,
     HumanReviewGroupDecision,
-    IndividualRdfIssueSummary,
+    HumanReviewReport,
     RdfKind,
     ReviewStatus,
     ShaclViolation,
@@ -42,8 +43,8 @@ def _write_evaluation(tmp_path, evaluation):
     return path
 
 
-def test_human_review_saves_no_findings_without_prompting(tmp_path) -> None:
-    """A conforming Consistency result produces an approved empty review."""
+def test_human_review_requires_explicit_approval_without_findings(tmp_path) -> None:
+    """A conforming Cross result still requires explicit human approval."""
 
     workflow, data, rule = _write_rdf_inputs(tmp_path)
     evaluation_file = _write_evaluation(
@@ -57,9 +58,6 @@ def test_human_review_saves_no_findings_without_prompting(tmp_path) -> None:
     )
     messages: list[str] = []
 
-    def must_not_prompt(prompt):
-        pytest.fail(f"Unexpected prompt: {prompt}")
-
     output_file = tmp_path / "human_review.json"
     report = run_human_review(
         workflow_file=workflow,
@@ -67,21 +65,31 @@ def test_human_review_saves_no_findings_without_prompting(tmp_path) -> None:
         rule_file=rule,
         consistency_evaluation_file=evaluation_file,
         output_file=output_file,
-        input_func=must_not_prompt,
+        input_func=lambda prompt: "1",
         output_func=messages.append,
     )
 
     assert report.status is ReviewStatus.APPROVED
+    assert report.input_received is True
+    assert report.final_decision is HumanReviewFinalDecision.APPROVE
+    assert report.approved is True
+    assert report.revision_requested is False
     assert report.groups == []
     assert report.findings == []
-    assert messages == ["確認事項なし"]
+    assert "最終成果物として承認しますか？" in messages
     saved = json.loads(output_file.read_text(encoding="utf-8"))
-    assert saved["summary"] == "確認事項なし"
+    assert saved["input_received"] is True
+    assert saved["approved"] is True
     assert saved["consistency_conforms"] is True
 
+    invalid = report.model_dump(mode="json")
+    invalid["input_received"] = False
+    with pytest.raises(ValueError, match="explicit human input"):
+        HumanReviewReport.model_validate(invalid)
 
-def test_human_review_displays_and_saves_individual_rdf_issues(tmp_path) -> None:
-    """Individual SHACL and Self-Review issues remain visible without Cross findings."""
+
+def test_human_review_collects_manual_revision_without_cross_findings(tmp_path) -> None:
+    """A human supplies the target and instruction when Cross has no finding."""
 
     workflow, data, rule = _write_rdf_inputs(tmp_path)
     evaluation_file = _write_evaluation(
@@ -93,20 +101,9 @@ def test_human_review_displays_and_saves_individual_rdf_issues(tmp_path) -> None
             reason="No cross-RDF violations.",
         ),
     )
-    issue = IndividualRdfIssueSummary(
-        rdf_kind=RdfKind.WORKFLOW,
-        rdf_file=str(workflow),
-        usable=True,
-        validation_conforms=False,
-        shacl_conforms=False,
-        shacl_violation_count=1,
-        shacl_violations=[{"message": "Missing actor"}],
-        self_review_status="max_iterations",
-        self_review_finding_count=1,
-        self_review_findings=[{"description": "A workflow step is missing"}],
-    )
     messages: list[str] = []
     output_file = tmp_path / "human_review.json"
+    answers = iter(["2", "1", "業務ステップの説明を修正する"])
 
     report = run_human_review(
         workflow_file=workflow,
@@ -114,24 +111,21 @@ def test_human_review_displays_and_saves_individual_rdf_issues(tmp_path) -> None
         rule_file=rule,
         consistency_evaluation_file=evaluation_file,
         output_file=output_file,
-        individual_rdf_issues={"workflow": issue},
-        input_func=lambda prompt: pytest.fail(f"Unexpected prompt: {prompt}"),
+        input_func=lambda prompt: next(answers),
         output_func=messages.append,
     )
 
-    rendered = "\n".join(messages)
-    assert "[Individual RDF issues]" in rendered
-    assert "Missing actor" in rendered
-    assert "A workflow step is missing" in rendered
-    assert report.individual_rdf_issues["workflow"].self_review_finding_count == 1
+    assert report.status is ReviewStatus.NEEDS_REVISION
+    assert report.final_decision is HumanReviewFinalDecision.REQUEST_REVISION
+    assert report.revision_requests[0].target_agent is AgentName.WORKFLOW
+    assert report.revision_requests[0].revision_instruction == "業務ステップの説明を修正する"
     saved = json.loads(output_file.read_text(encoding="utf-8"))
-    assert saved["individual_rdf_issues"]["workflow"][
-        "shacl_violation_count"
-    ] == 1
+    assert saved["revision_requested"] is True
+    assert saved["revision_requests"][0]["target_agent"] == "workflow"
 
 
-def test_human_review_collects_all_decisions_and_supplemental_context(tmp_path) -> None:
-    """All four decisions remain linked to their original Consistency findings."""
+def test_human_review_requests_revision_for_cross_findings(tmp_path) -> None:
+    """One explicit decision returns all Cross instructions to the target Agent."""
 
     workflow, data, rule = _write_rdf_inputs(tmp_path)
     violations = [
@@ -164,7 +158,7 @@ def test_human_review_collects_all_decisions_and_supplemental_context(tmp_path) 
             violation_analyses=analyses,
         ),
     )
-    answers = iter(["4", "1", "2", "3", "PDFの別紙を確認する", "4"])
+    answers = iter(["2"])
     messages: list[str] = []
     output_file = tmp_path / "human_review.json"
 
@@ -179,25 +173,25 @@ def test_human_review_collects_all_decisions_and_supplemental_context(tmp_path) 
         output_func=messages.append,
     )
 
-    assert report.status is ReviewStatus.UNKNOWN
+    assert report.status is ReviewStatus.NEEDS_REVISION
+    assert report.input_received is True
+    assert report.approved is False
+    assert report.revision_requested is True
     assert len(report.groups) == 1
-    assert report.groups[0].decision is HumanReviewGroupDecision.REVIEW_INDIVIDUALLY
-    assert report.groups[0].individually_reviewed is True
-    assert len(report.groups[0].individual_results) == 4
-    assert [finding.decision for finding in report.findings] == [
-        HumanReviewDecision.APPROVE_FINDING,
-        HumanReviewDecision.APPROVE_CURRENT_RDF,
-        HumanReviewDecision.PROVIDE_CONTEXT,
-        HumanReviewDecision.PENDING,
+    assert report.groups[0].decision is HumanReviewGroupDecision.APPROVE_ALL_FINDINGS
+    assert report.groups[0].individually_reviewed is False
+    assert len(report.revision_requests) == 1
+    assert report.revision_requests[0].target_agent is AgentName.DATA
+    assert report.revision_requests[0].source_finding_ids == [
+        f"consistency-finding-{index:04d}" for index in range(4)
     ]
-    assert report.findings[2].supplemental_comment == "PDFの別紙を確認する"
     assert report.findings[2].consistency_violation_index == 2
     assert report.findings[2].source_analysis.repair_instruction == "repair 2"
     rendered = "\n".join(messages)
     assert "[Group 1/1]" in rendered
     assert "該当件数: 4件" in rendered
-    assert "4. 個別に確認" in rendered
-    for label in ("違反内容", "対象リソース", "原因", "修正対象Agent", "修正指示"):
+    assert "2. 要修正" in rendered
+    for label in ("問題内容", "共通原因", "修正対象Agent", "修正指示"):
         assert label in rendered
     saved = json.loads(output_file.read_text(encoding="utf-8"))
     assert saved["findings"][2]["finding_id"] == "consistency-finding-0002"
@@ -246,8 +240,8 @@ def test_grouping_uses_structural_fields_instead_of_natural_language() -> None:
     assert [len(group) for group in groups] == [2, 1]
 
 
-def test_group_review_applies_one_decision_to_all_findings(tmp_path) -> None:
-    """A group-level decision avoids individual prompts and remains traceable."""
+def test_human_review_approval_applies_to_all_cross_findings(tmp_path) -> None:
+    """Explicit final approval accepts the current RDF for every Cross finding."""
 
     workflow, data, rule = _write_rdf_inputs(tmp_path)
     violations = [
@@ -284,7 +278,7 @@ def test_group_review_applies_one_decision_to_all_findings(tmp_path) -> None:
             violation_analyses=analyses,
         ),
     )
-    answers = iter(["3", "参照先クラスの根拠を再確認する"])
+    answers = iter(["1"])
 
     report = run_human_review(
         workflow_file=workflow,
@@ -297,18 +291,17 @@ def test_group_review_applies_one_decision_to_all_findings(tmp_path) -> None:
     )
 
     group = report.groups[0]
-    assert group.decision is HumanReviewGroupDecision.PROVIDE_GROUP_CONTEXT
+    assert report.status is ReviewStatus.APPROVED
+    assert report.approved is True
+    assert group.decision is HumanReviewGroupDecision.APPROVE_ALL_CURRENT_RDF
     assert group.individually_reviewed is False
     assert group.individual_results == []
     assert len(group.source_findings) == 2
-    assert [finding.decision for finding in report.findings] == [
-        HumanReviewDecision.PROVIDE_CONTEXT,
-        HumanReviewDecision.PROVIDE_CONTEXT,
-    ]
     assert all(
-        finding.supplemental_comment == "参照先クラスの根拠を再確認する"
+        finding.decision is HumanReviewDecision.APPROVE_CURRENT_RDF
         for finding in report.findings
     )
+    assert report.revision_requests == []
 
 
 def test_human_review_rejects_invalid_consistency_json(tmp_path) -> None:
@@ -328,7 +321,9 @@ def test_human_review_rejects_invalid_consistency_json(tmp_path) -> None:
         )
 
 
-def test_human_review_subcommand_uses_supplied_files(tmp_path, capsys) -> None:
+def test_human_review_subcommand_uses_supplied_files(
+    monkeypatch, tmp_path, capsys
+) -> None:
     """The standalone human-review command runs without an OpenAI API call."""
 
     workflow, data, rule = _write_rdf_inputs(tmp_path)
@@ -343,6 +338,7 @@ def test_human_review_subcommand_uses_supplied_files(tmp_path, capsys) -> None:
     )
     output_file = tmp_path / "human_review.json"
 
+    monkeypatch.setattr("builtins.input", lambda prompt: "1")
     exit_code = controller.run(
         [
             "human-review",

@@ -17,9 +17,13 @@ from business_analysis_agents.models import (
     ControllerStage,
     ControllerStageResult,
     ControllerStageStatus,
+    FinalizationStatus,
     HumanReviewDecision,
+    HumanReviewDecisionRecord,
+    HumanReviewFinalDecision,
     HumanReviewFindingResult,
     HumanReviewReport,
+    HumanReviewRevisionRequest,
     RdfKind,
     ReviewStatus,
     RunStatus,
@@ -106,12 +110,42 @@ def _human_review_with_rule_finding(
         decision=decision,
         supplemental_comment=comment,
     )
+    approved = decision is HumanReviewDecision.APPROVE_CURRENT_RDF
+    revision_requests = (
+        []
+        if approved
+        else [
+            HumanReviewRevisionRequest(
+                target_agent=AgentName.RULE,
+                revision_instruction=(
+                    f"{analysis.repair_instruction}\n{comment}"
+                    if comment
+                    else analysis.repair_instruction
+                ),
+                source_finding_ids=[finding.finding_id],
+                target_resources=[finding.target_resource],
+            )
+        ]
+    )
+    final_decision = (
+        HumanReviewFinalDecision.APPROVE
+        if approved
+        else HumanReviewFinalDecision.REQUEST_REVISION
+    )
+    record = HumanReviewDecisionRecord(
+        review_round=1,
+        decision=final_decision,
+        approved=approved,
+        revision_requested=not approved,
+        revision_requests=revision_requests,
+    )
     return HumanReviewReport(
-        status=(
-            ReviewStatus.UNKNOWN
-            if decision is HumanReviewDecision.PENDING
-            else ReviewStatus.NEEDS_REVISION
-        ),
+        status=ReviewStatus.APPROVED if approved else ReviewStatus.NEEDS_REVISION,
+        input_received=True,
+        final_decision=final_decision,
+        approved=approved,
+        revision_requested=not approved,
+        review_round=1,
         consistency_status=ReviewStatus.NEEDS_REVISION,
         consistency_conforms=False,
         workflow_rdf_file="workflow.ttl",
@@ -119,7 +153,36 @@ def _human_review_with_rule_finding(
         rule_rdf_file="rule.ttl",
         consistency_evaluation_file="consistency.json",
         findings=[finding],
+        revision_requests=revision_requests,
+        decision_history=[record],
         summary="Reviewed one finding.",
+    )
+
+
+def _approved_human_review(**kwargs) -> HumanReviewReport:
+    history = list(kwargs.get("decision_history") or [])
+    review_round = int(kwargs.get("review_round", len(history) + 1))
+    record = HumanReviewDecisionRecord(
+        review_round=review_round,
+        decision=HumanReviewFinalDecision.APPROVE,
+        approved=True,
+        revision_requested=False,
+    )
+    return HumanReviewReport(
+        status=ReviewStatus.APPROVED,
+        input_received=True,
+        final_decision=HumanReviewFinalDecision.APPROVE,
+        approved=True,
+        revision_requested=False,
+        review_round=review_round,
+        consistency_status=ReviewStatus.APPROVED,
+        consistency_conforms=True,
+        workflow_rdf_file=str(kwargs["workflow_file"]),
+        data_rdf_file=str(kwargs["data_file"]),
+        rule_rdf_file=str(kwargs["rule_file"]),
+        consistency_evaluation_file=str(kwargs["consistency_evaluation_file"]),
+        decision_history=[*history, record],
+        summary="Human explicitly approved the final RDF.",
     )
 
 
@@ -189,16 +252,7 @@ def test_end_to_end_controller_completes_without_human_revision(
         assert kwargs["output_file"] == (
             tmp_path / "human_review" / "human_review.json"
         )
-        return HumanReviewReport(
-            status=ReviewStatus.APPROVED,
-            consistency_status=ReviewStatus.APPROVED,
-            consistency_conforms=True,
-            workflow_rdf_file=str(kwargs["workflow_file"]),
-            data_rdf_file=str(kwargs["data_file"]),
-            rule_rdf_file=str(kwargs["rule_file"]),
-            consistency_evaluation_file=str(kwargs["consistency_evaluation_file"]),
-            summary="確認事項なし",
-        )
+        return _approved_human_review(**kwargs)
 
     monkeypatch.setattr(controller, "run_scenario_pipeline", fake_scenario)
     monkeypatch.setattr(controller, "run_workflow_pipeline", fake_workflow)
@@ -236,7 +290,9 @@ def test_end_to_end_controller_completes_without_human_revision(
     assert saved["completed"] is True
     assert saved["stages"][3]["pipeline_status"] == "completed"
     assert saved["stages"][4]["pipeline_status"] == "approved"
-    assert saved["final_status"] == "completed_without_human_revision"
+    assert saved["final_status"] == "completed_after_human_approval"
+    assert saved["human_review_input_received"] is True
+    assert saved["human_review_approved"] is True
     assert "consistency_evaluation" in saved["output_files"]
     assert "human_review" in saved["output_files"]
     assert "final_summary" in saved["output_files"]
@@ -244,7 +300,7 @@ def test_end_to_end_controller_completes_without_human_revision(
     final_summary = json.loads(
         (tmp_path / "final" / "final_summary.json").read_text(encoding="utf-8")
     )
-    assert final_summary["final_status"] == "completed_without_human_revision"
+    assert final_summary["final_status"] == "completed_after_human_approval"
     assert final_summary["human_review_revision_performed"] is False
     progress_output = capsys.readouterr().out
     for index, name in enumerate(
@@ -260,6 +316,112 @@ def test_end_to_end_controller_completes_without_human_revision(
     ):
         assert f"[Phase {index}/6] {name}" in progress_output
     assert (tmp_path / "controller" / "progress.jsonl").exists()
+
+
+def test_end_to_end_human_revision_returns_to_human_review(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A requested revision is Cross-checked and explicitly approved next round."""
+
+    scenario_path = tmp_path / "scenario" / "scenario_final.ttl"
+
+    def fake_scenario(**kwargs):
+        scenario_path.parent.mkdir(parents=True)
+        scenario_path.write_text("<urn:s> <urn:p> <urn:o> .", encoding="utf-8")
+        return {"final_status": "completed", "scenario_file": str(scenario_path)}
+
+    def fake_workflow(**kwargs):
+        _write_rdf_artifacts(kwargs["output_dir"], "workflow")
+        return {"final_status": "completed"}
+
+    def fake_data_rule(**kwargs):
+        _write_rdf_artifacts(kwargs["output_dir"], "data")
+        _write_rdf_artifacts(kwargs["output_dir"], "rule")
+        return {"final_status": "completed"}
+
+    monkeypatch.setattr(controller, "run_scenario_pipeline", fake_scenario)
+    monkeypatch.setattr(controller, "run_workflow_pipeline", fake_workflow)
+    monkeypatch.setattr(controller, "run_data_rule_pipeline", fake_data_rule)
+    monkeypatch.setattr(
+        controller,
+        "run_consistency_revision_loop",
+        lambda **kwargs: (
+            {"final_status": "completed", "evaluation": {"violations": []}},
+            {"status": "completed", "revision_rounds": 0},
+        ),
+    )
+
+    review_calls: list[int] = []
+
+    def fake_human_review(**kwargs):
+        review_round = kwargs["review_round"]
+        review_calls.append(review_round)
+        history = list(kwargs["decision_history"])
+        if review_round == 2:
+            return _approved_human_review(**kwargs)
+        request = HumanReviewRevisionRequest(
+            target_agent=AgentName.RULE,
+            revision_instruction="Correct the documented Rule RDF relation.",
+        )
+        record = HumanReviewDecisionRecord(
+            review_round=1,
+            decision=HumanReviewFinalDecision.REQUEST_REVISION,
+            approved=False,
+            revision_requested=True,
+            revision_requests=[request],
+        )
+        return HumanReviewReport(
+            status=ReviewStatus.NEEDS_REVISION,
+            input_received=True,
+            final_decision=HumanReviewFinalDecision.REQUEST_REVISION,
+            approved=False,
+            revision_requested=True,
+            review_round=1,
+            consistency_status=ReviewStatus.APPROVED,
+            consistency_conforms=True,
+            workflow_rdf_file=str(kwargs["workflow_file"]),
+            data_rdf_file=str(kwargs["data_file"]),
+            rule_rdf_file=str(kwargs["rule_file"]),
+            consistency_evaluation_file=str(kwargs["consistency_evaluation_file"]),
+            revision_requests=[request],
+            decision_history=[*history, record],
+            summary="Human requested revision.",
+        )
+
+    revision_calls: list[str] = []
+
+    def fake_human_revision(**kwargs):
+        revision_calls.append(kwargs["human_review"].revision_requests[0].target_agent.value)
+        return {
+            "revision_performed": True,
+            "repair_bundles": [{"target_agent": "rule"}],
+            "revision_results": [{"target_agent": "rule", "final_status": "completed"}],
+            "individual_checks_passed": True,
+            "consistency_result": {
+                "final_status": "completed",
+                "evaluation": {"violations": []},
+            },
+        }
+
+    monkeypatch.setattr(controller, "run_human_review", fake_human_review)
+    monkeypatch.setattr(controller, "run_human_review_revision", fake_human_revision)
+
+    summary = controller.run_end_to_end_controller(
+        pdf_file=tmp_path / "manual.pdf",
+        model="test-model",
+        output_dir=tmp_path,
+    )
+
+    assert review_calls == [1, 2]
+    assert revision_calls == ["rule"]
+    assert summary.status is RunStatus.COMPLETED
+    assert summary.final_status is FinalizationStatus.COMPLETED_AFTER_HUMAN_REVISION
+    assert summary.human_review_input_received is True
+    assert summary.human_review_approved is True
+    assert summary.human_review_revision_requested is True
+    assert summary.human_review_approved_after_revision is True
+    assert summary.human_review_rounds == 2
 
 
 @pytest.mark.parametrize("issue_kind", ["workflow", "data", "cross"])
@@ -325,7 +487,7 @@ def test_end_to_end_controller_continues_with_quality_issues(
 
     def fake_human_review(**kwargs):
         calls.append("human_review")
-        issues = kwargs["individual_rdf_issues"]
+        assert "individual_rdf_issues" not in kwargs
         if issue_kind == "cross":
             report = _human_review_with_rule_finding(
                 HumanReviewDecision.APPROVE_CURRENT_RDF
@@ -338,24 +500,10 @@ def test_end_to_end_controller_continues_with_quality_issues(
                     "consistency_evaluation_file": str(
                         kwargs["consistency_evaluation_file"]
                     ),
-                    "individual_rdf_issues": issues,
                 }
             )
         else:
-            assert issues[issue_kind].self_review_finding_count == 1
-            report = HumanReviewReport(
-                status=ReviewStatus.APPROVED,
-                consistency_status=ReviewStatus.APPROVED,
-                consistency_conforms=True,
-                workflow_rdf_file=str(kwargs["workflow_file"]),
-                data_rdf_file=str(kwargs["data_file"]),
-                rule_rdf_file=str(kwargs["rule_file"]),
-                consistency_evaluation_file=str(
-                    kwargs["consistency_evaluation_file"]
-                ),
-                individual_rdf_issues=issues,
-                summary="Individual issues are available for review.",
-            )
+            report = _approved_human_review(**kwargs)
         Path(kwargs["output_file"]).parent.mkdir(parents=True, exist_ok=True)
         Path(kwargs["output_file"]).write_text(
             report.model_dump_json(), encoding="utf-8"
@@ -375,7 +523,12 @@ def test_end_to_end_controller_continues_with_quality_issues(
     )
 
     assert calls == ["workflow", "data_rule", "consistency", "human_review"]
-    assert summary.status is RunStatus.COMPLETED_WITH_ISSUES
+    expected_status = (
+        RunStatus.COMPLETED_WITH_ISSUES
+        if issue_kind == "cross"
+        else RunStatus.COMPLETED
+    )
+    assert summary.status is expected_status
     assert summary.completed is True
     assert summary.fatal_error is False
     assert summary.human_review_required is True
@@ -390,25 +543,21 @@ def test_end_to_end_controller_continues_with_quality_issues(
             encoding="utf-8"
         )
     )
-    if issue_kind != "cross":
-        assert saved_review["individual_rdf_issues"][issue_kind][
-            "self_review_finding_count"
-        ] == 1
+    assert "individual_rdf_issues" not in saved_review
     saved_summary = json.loads(
         (tmp_path / "controller" / "run_summary.json").read_text(
             encoding="utf-8"
         )
     )
-    assert saved_summary["status"] == "completed_with_issues"
+    assert saved_summary["status"] == expected_status.value
     assert saved_summary["fatal_error"] is False
     assert saved_summary["human_review_required"] is True
     progress_output = capsys.readouterr().out
-    if issue_kind in {"workflow", "data"}:
-        assert f"{issue_kind.title()} completed with issues" in progress_output
-        assert "Continuing to next phase" in progress_output
-    else:
+    if issue_kind == "cross":
         assert "Cross Consistency completed with unresolved findings" in progress_output
         assert "Continuing to Human Review" in progress_output
+    else:
+        assert f"{issue_kind.title()} completed with issues" not in progress_output
 
 
 def _run_human_review_revision(
@@ -427,8 +576,9 @@ def _run_human_review_revision(
         assert kwargs["target_agent"] is AgentName.RULE
         bundle = kwargs["repair_bundle"]
         assert bundle["source"] == "human_review"
-        assert bundle["items"][0]["human_decision"] == decision.value
-        assert bundle["items"][0]["human_response"] == comment
+        assert bundle["items"][0]["human_decision"] == "request_revision"
+        if comment:
+            assert comment in bundle["items"][0]["revision_instruction"]
         return {"target_agent": "rule", "final_status": targeted_status}
 
     def fake_consistency(**kwargs):
@@ -514,9 +664,7 @@ def test_human_review_revision_continues_after_individual_quality_issue(
 
     assert calls == ["targeted", "consistency"]
     assert result["individual_checks_passed"] is False
-    assert result["final_status"] == (
-        "individual_validation_failed_after_human_review"
-    )
+    assert result["final_status"] == "completed_after_human_revision"
 
 
 def test_end_to_end_controller_stops_after_stage_exception(monkeypatch, tmp_path) -> None:
@@ -626,7 +774,7 @@ def test_end_to_end_controller_stops_when_required_rdf_is_unusable(
     assert summary.status is RunStatus.FATAL_FAILED
     assert summary.failed_stage is ControllerStage.WORKFLOW
     assert workflow_stage.status is ControllerStageStatus.FATAL_FAILED
-    assert workflow_stage.pipeline_status == "needs_review"
+    assert workflow_stage.pipeline_status == "completed"
 
 
 def test_end_to_end_controller_records_human_review_failure(
