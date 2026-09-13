@@ -19,11 +19,11 @@ BASE_WORKFLOW_INSTRUCTIONS = """
 あなたはWorkflow RDF抽出を担当するAIエージェントです。
 
 全体ルール:
-- Scenario RDFを業務全体、Actor、主要UseCase、Package構造の把握に使用してください。
+- Scenario RDFを、業務全体の概要と主要な構成要素・関係の把握に使用してください。
 - source_documentのページ番号付きPDF本文を、詳細情報と根拠情報の確認に使用してください。
 - Scenario RDFにない情報でも、PDF本文に明確に記載され、Workflow RDFに必要であれば抽出してください。
 - Scenario RDFとPDF本文が矛盾する場合は、原則としてPDF本文を根拠とし、矛盾をunresolved_itemsに記録してください。
-- 与えられたOntology TTLを唯一の業務語彙体系として扱ってください。
+- 与えられたOntology TTLをWorkflow RDFで使用可能な唯一の業務語彙体系として扱ってください。
 - Ontology TTLを生成・変更しないでください。
 - SHACL生成モード以外ではSHACL TTLを生成・変更しないでください。
 - PDF本文にもScenario RDFにも書かれていない活動、実行主体、データ、条件、順序、根拠を推測しないでください。
@@ -33,30 +33,28 @@ BASE_WORKFLOW_INSTRUCTIONS = """
 - RDF構文、語彙、SHACL適合性はPydanticではなくRDFLibとpySHACLで検証されます。
 - RDF生成・revisionモードでは、完全なWorkflow RDFをworkflow_rdf_turtleに出力してください。
 - TurtleをMarkdownコードフェンスで囲まないでください。
-- 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
+- 与えられたOntology TTLに含まれるClass・Propertyのみを使用してください。
 - 業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
-- Ontology TTLのrdfs:label、rdfs:comment、rdfs:subClassOf、rdfs:domain、rdfs:rangeを参照し、最も適切な語彙を選択してください。
+- Class・Propertyの意味および関係構造は、Ontology TTLの定義に従ってください。
+- Ontology TTLのrdfs:label、rdfs:comment、rdfs:subClassOf、rdfs:domain、rdfs:range等を参照し、最も適切な語彙を選択してください。
 """.strip()
 
 WORKFLOW_GENERATION_INSTRUCTIONS = """
 Mode: workflow_generation
-プロンプトで与えられた固定済みのontology_turtleを参照してください。
-Workflow RDFを完全なTurtle文字列として直接生成してください。
 
-Scenario RDFから業務全体の構造を把握し、PDF本文から業務活動、実行主体、
-順序、分岐、入出力、例外、根拠の詳細を確認してください。
+入力された固定済みのontology_turtleを参照し、Workflow RDFを完全なTurtle文字列として直接生成してください。
+
+Scenario RDFから業務全体の概要と主要な構成要素・関係を把握し、PDF本文からWorkflow RDFに必要な業務活動、実行主体、順序、分岐、条件、入出力、例外などの詳細を抽出してください。
 
 ルール:
-- 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
-- 業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
-- Ontology TTLの定義を参照して、最も適切な語彙を選択してください。
-- RDFの構文上必要なrdf:type以外は、Ontology TTLで定義されたPropertyだけを使ってください。
-- 根拠を表すClass・PropertyがOntology TTLに定義されている場合だけ、根拠ページ番号と根拠テキストをRDFに含めてください。
-- 根拠用語がOntology TTLに存在しない場合は、新しい語彙を作らずevidence_summaryに記録してください。
-- 順序関係は、シナリオで順序が明示されている場合だけ作成してください。
-- 同じ概念エンティティに複数のURIを割り当てないようにしてください。
-- 不明な情報を補完せず、unresolved_itemsに入れてください。
-- workflow_rdf_turtleは必須です。
+- Scenario RDFは業務全体の概要を把握するために使用し、Workflow RDFの詳細は主にPDF本文から確認してください。
+- Scenario RDFに記載されていない詳細でも、PDF本文に明確な根拠があれば抽出してください。
+- 業務活動間の順序関係は、PDF本文またはScenario RDFからその順序が明確に確認できる場合だけ表現してください。
+- 単なる文章上の記載順を、業務上の実行順序として扱わないでください。
+- 分岐、条件、例外、入出力についても、PDF本文またはScenario RDFに明確な根拠がある場合だけ表現してください。
+- 根拠を表す適切なClass・PropertyがOntology TTLに存在する場合だけ、根拠情報をWorkflow RDFに含めてください。
+- 根拠を表す適切な語彙が存在しない場合は、新しい語彙を作らずevidence_summaryに記録してください。
+- 同一の業務上の概念を不必要に重複して生成しないでください。
 """.strip()
 
 WORKFLOW_SHACL_GENERATION_INSTRUCTIONS = """

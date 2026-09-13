@@ -19,43 +19,42 @@ BASE_DATA_RULE_INSTRUCTIONS = """
 あなたは関連データ抽出とルール抽出を担当するAIエージェントです。
 
 全体ルール:
-- Scenario RDFを業務全体、Actor、主要UseCase、Package構造の把握に使用してください。
+- Scenario RDFを、業務全体の概要と主要な構成要素・関係の把握に使用してください。
 - source_documentのページ番号付きPDF本文を、詳細情報と根拠情報の確認に使用してください。
 - Scenario RDFにない情報でも、PDF本文に明確に記載され、対象RDFに必要であれば抽出してください。
 - Scenario RDFとPDF本文が矛盾する場合は、原則としてPDF本文を根拠とし、矛盾をunresolved_itemsに記録してください。
-- 各処理で与えられたOntology TTLを唯一の業務語彙体系として扱ってください。
+- 各処理で与えられたOntology TTLを、対象RDFで使用可能な唯一の語彙体系として扱ってください。
 - Ontology TTLを生成・変更しないでください。
 - SHACL生成モード以外ではSHACL TTLを生成・変更しないでください。
+- Ontology TTLに含まれるClass・Propertyのみを使用し、新しいClass・Propertyを作成しないでください。
+- 業務固有のインスタンスURIは生成してかまいません。
+- Class・Propertyの選択と関係構造は、Ontology TTLの定義に従ってください。
 - PDF本文にもScenario RDFにも書かれていないデータ、属性、関係、判定条件、結果を推測しないでください。
-- 根拠にはsource_documentのページ番号と本文を使用してください。
 - 不確実または根拠不足の内容はunresolved_itemsに残してください。
-- 指示された場合、Data RDFとRule RDFは完全なTurtle文字列として直接出力してください。
+- 指示された場合、Data RDFまたはRule RDFを完全なTurtle文字列として直接出力してください。
 - 中間的な業務RDF JSONは作成しないでください。
 - RDF構文、語彙、SHACL適合性はPydanticではなくRDFLibとpySHACLで検証されます。
 - 説明用・設計用フィールドは、柔軟なJSON構造で返してかまいません。
 - TurtleをMarkdownコードフェンスで囲まないでください。
-- 与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
-- 業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
-- Ontology TTLのrdfs:label、rdfs:comment、rdfs:subClassOf、rdfs:domain、rdfs:rangeを参照し、最も適切な語彙を選択してください。
 """.strip()
 
 DATA_GENERATION_INSTRUCTIONS = """
 Mode: data_generation
-プロンプトで与えられた固定済みのontology_turtleを使ってください。
-Data RDFを完全なTurtle文字列として直接生成してください。
 
-与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
-業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
-Ontology TTLの定義を参照して、最も適切な語彙を選択してください。
-RDFの構文上必要なrdf:type以外は、Ontology TTLで定義されたPropertyだけを使ってください。
+入力された固定済みのontology_turtleを参照し、Data RDFを完全なTurtle文字列として直接生成してください。
+Scenario RDFから業務全体の概要と主要な構成要素・関係を把握し、PDF本文から業務で扱われるデータに関する詳細を抽出してください。
 
-Scenario RDFまたはPDF本文で確認できるデータ概念だけを表現してください。対象には、文書、帳票、
-通知、結果、データ項目、業務活動によるデータ利用・生成、データ間の関係、
-明示された責任主体、根拠、未解決事項を含めてください。
-
-PDF本文にもScenario RDFにも書かれていない汎用的な帳票属性を追加しないでください。
-同じデータ概念に重複URIを割り当てないよう、正規化した識別子を使ってください。
-data_rdf_turtleは必須です。
+ルール:
+- Scenario RDFまたはPDF本文から確認できるデータ概念だけを表現してください。
+- Data RDFでは、業務で扱われる文書、帳票、通知、結果、データ項目などを対象としてください。
+- データ間の関係や、業務活動によるデータの利用・生成に関する関係は、PDF本文またはScenario RDFから明確に確認できる場合だけ表現してください。
+- データに関する責任主体や関与主体も、PDF本文またはScenario RDFに明確な根拠がある場合だけ表現してください。
+- PDF本文やScenario RDFに明示されていない一般的な帳票項目、属性、データ構造を推測して追加しないでください。
+- 文書中の記載内容から、データ項目やデータ間の関係を過度に細分化して推測しないでください。
+- 根拠情報を記録する場合は、source_documentのページ番号と本文を使用してください。
+- 同一のデータ概念を不必要に重複して生成しないでください。
+- 同一のデータ概念には、一貫したインスタンスURIを使用してください。
+- data_rdf_turtleは必須です。
 """.strip()
 
 DATA_SHACL_GENERATION_INSTRUCTIONS = """
@@ -75,21 +74,17 @@ Data RDFの構造的妥当性を検証するSHACL Shapesを生成してくださ
 - 上記以外のprefixを使用する場合は、そのprefixもTurtle内で必ず宣言してください。
 - 宣言されていないprefixは使用しないでください。
 - 出力前に、Turtleとして構文的に完結していることを確認してください。
-
 - SHACL標準語彙と、固定Ontology内でClassまたはPropertyとして明示的に定義されている語彙だけをSHACL制約に使用してください。
 - sh:targetClass、sh:classには、固定Ontology内でrdfs:Classまたはowl:Classとして明示的に定義されたURIだけを使用してください。
 - sh:pathには、固定Ontology内でPropertyとして明示的に定義されたURIだけを使用してください。
 - rdfs:subClassOf、rdfs:domain、rdfs:range、schema:domainIncludes、schema:rangeIncludes等の参照先として登場するだけのURIを、ClassやPropertyとして直接使用しないでください。
-
 - Propertyを特定ClassのShapeに設定する場合は、固定Ontologyのrdfs:domainまたはschema:domainIncludesを根拠にしてください。
 - range制約を設定する場合も固定Ontologyのrdfs:rangeまたはschema:rangeIncludesを根拠にし、明示定義されていないClassをsh:classとして使用しないでください。
 - 固定Ontologyに明示されていないdatatype変換や語彙間の意味的対応を一般知識から推測しないでください。
 - 固定Ontologyから十分な根拠を得られない制約は追加しないでください。
-
 - raw RDFに登場する対象クラスを参考にしつつ、単に現在のraw RDFだけを通すための制約にしないでください。
 - 業務インスタンスURIをsh:targetNodeとして列挙するなど、特定のraw RDFへ過剰適合させないでください。
 - 固定Ontologyに根拠のない必須値やカーディナリティを作らないでください。
-
 - ontology_turtleとdata_rdf_rawは変更しないでください。
 - data_rdf_turtleとrule_rdf_turtleは出力しないでください。
 """.strip()
@@ -114,8 +109,7 @@ data_rdf_turtleは必須です。
 
 DATA_SELF_REVIEW_INSTRUCTIONS = """
 Mode: data_self_review
-PDF本文、Scenario RDF、現在のData RDFを比較し、構文やSHACLではなく内容の意味的な
-整合性と網羅性を自己評価してください。
+PDF本文、Scenario RDF、現在のData RDFを比較し、構文やSHACLではなく内容の意味的な整合性と網羅性を自己評価してください。
 
 確認事項:
 - 文書、帳票、データ、データ項目、使用・生成されるデータが欠落していないか。
@@ -128,37 +122,33 @@ PDF本文、Scenario RDF、現在のData RDFを比較し、構文やSHACLでは�
 出力ルール:
 - self_review_resultを必須で出力し、Data RDFやSHACLは出力しないでください。
 - 問題がなければpassed=true、findings=[]としてください。
-- 問題があればpassed=falseとし、category、target、description、evidence、
-  revision_instructionをfindingごとに記録してください。
+- 問題があればpassed=falseとし、category、target、description、evidence、revision_instructionをfindingごとに記録してください。
 - reviewer_agent=data、rdf_kind=dataとしてください。
-- evidenceにはsourceをPDFまたはScenario RDFとし、ページ番号やURI等をlocator、
-  根拠となる記述をexcerptに入れてください。
+- evidenceにはsourceをPDFまたはScenario RDFとし、ページ番号やURI等をlocator、根拠となる記述をexcerptに入れてください。
 - 根拠のない推測やOntology・SHACLの変更提案を含めないでください。
 """.strip()
 
 RULE_GENERATION_INSTRUCTIONS = """
 Mode: rule_generation
-プロンプトで与えられた固定済みのontology_turtle、PDF本文、Scenario RDF、
-検証済みData RDFだけを使ってください。
-Rule RDFを完全なTurtle文字列として直接生成してください。
 
-与えられたOntology TTLに定義されているClass・Propertyのみを使用してください。
-業務固有のインスタンスURIは生成できますが、新しいClass・Propertyは作成しないでください。
-Ontology TTLの定義を参照して、最も適切な語彙を選択してください。
-RDFの構文上必要なrdf:type以外は、Ontology TTLで定義されたPropertyだけを使ってください。
+入力された固定済みのontology_turtle、PDF本文、Scenario RDF、および検証済みData RDFを参照し、Rule RDFを完全なTurtle文字列として直接生成してください。
 
-Scenario RDFまたはPDF本文で確認できる判断条件、適用条件、資格・申請条件、
-数値・期間条件、例外条件、分岐条件、必要書類、結果、データ参照だけを表現してください。
-PDF本文にもScenario RDFにも明示されていない数式、
-閾値、AND/OR/NOT構造、形式的な式を作らないでください。
-データを参照する場合は、可能な限り検証済みData RDFで定義されたエンティティを再利用してください。
-rule_rdf_turtleは必須です。
+ルール:
+- Scenario RDFまたはPDF本文から確認できる判断条件、適用条件、資格・申請条件、数値・期間条件、例外条件、分岐条件、必要書類、結果、データ参照などを対象としてください。
+- 条件、例外、結果、およびそれらの関係は、PDF本文またはScenario RDFに明確な根拠がある場合だけ表現してください。
+- PDF本文やScenario RDFに明示されていない数式、閾値、AND/OR/NOT構造、形式的な条件式を推測して追加しないでください。
+- 文書中の記述を、根拠なくより厳密な論理式や条件構造へ変換しないでください。
+- データを参照する場合は、可能な限り検証済みData RDFで定義されたエンティティを再利用してください。
+- Data RDFに対応するエンティティが存在しない場合でも、根拠なく代替エンティティを作成しないでください。
+- 根拠情報を記録する場合は、source_documentのページ番号と本文を使用してください。
+- 同一の業務ルールや条件を不必要に重複して生成しないでください。
+- 同一の概念には、一貫したインスタンスURIを使用してください。
+- rule_rdf_turtleは必須です。
 """.strip()
 
 RULE_SHACL_GENERATION_INSTRUCTIONS = """
 Mode: rule_shacl_generation
-生成済みのrule_rdf_rawと固定済みのontology_turtleを入力として、
-Rule RDFの構造的妥当性を検証するSHACL Shapesを生成してください。
+生成済みのrule_rdf_rawと固定済みのontology_turtleを入力として、Rule RDFの構造的妥当性を検証するSHACL Shapesを生成してください。
 
 ルール:
 - rule_shacl_turtleに、単独でRDFLibによりparse可能な完全なTurtle文字列を出力してください。
@@ -172,21 +162,17 @@ Rule RDFの構造的妥当性を検証するSHACL Shapesを生成してくださ
 - 上記以外のprefixを使用する場合は、そのprefixもTurtle内で必ず宣言してください。
 - 宣言されていないprefixは使用しないでください。
 - 出力前に、Turtleとして構文的に完結していることを確認してください。
-
 - SHACL標準語彙と、固定Ontology内でClassまたはPropertyとして明示的に定義されている語彙だけをSHACL制約に使用してください。
 - sh:targetClass、sh:classには、固定Ontology内でrdfs:Classまたはowl:Classとして明示的に定義されたURIだけを使用してください。
 - sh:pathには、固定Ontology内でPropertyとして明示的に定義されたURIだけを使用してください。
 - rdfs:subClassOf、rdfs:domain、rdfs:range等の参照先として登場するだけのURIを、ClassやPropertyとして直接使用しないでください。
-
 - Propertyを特定ClassのShapeに設定する場合は、固定Ontologyのrdfs:domainを根拠にしてください。
 - range制約を設定する場合は固定Ontologyのrdfs:rangeを根拠にし、明示定義されていないClassをsh:classとして使用しないでください。
 - 固定Ontologyに明示されていないdatatype変換や語彙間の意味的対応を一般知識から推測しないでください。
 - 固定Ontologyから十分な根拠を得られない制約は追加しないでください。
-
 - raw RDFに登場する対象クラスを参考にしつつ、単に現在のraw RDFだけを通すための制約にしないでください。
 - 業務インスタンスURIをsh:targetNodeとして列挙するなど、特定のraw RDFへ過剰適合させないでください。
 - 固定Ontologyに根拠のない必須値やカーディナリティを作らないでください。
-
 - ontology_turtleとrule_rdf_rawは変更しないでください。
 - data_rdf_turtleとrule_rdf_turtleは出力しないでください。
 """.strip()
