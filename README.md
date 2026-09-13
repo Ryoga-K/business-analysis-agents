@@ -2,7 +2,7 @@
 
 OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Workflow RDF、Data RDF、Rule RDFを生成・検証する研究用プロトタイプです。
 
-現在は、PDFと固定Scenario OntologyからScenario RDFを生成し、Workflow RDF、Data RDF、Rule RDFの生成・個別検証・修正、3 RDF間のCross Review、対話式Human Review、Human Reviewに基づく最終RDF確定までを1コマンドで実行できます。Web UIとDB保存はまだ実装していません。
+現在のE2E実験では、PDFと固定Scenario OntologyからScenario RDFを生成し、Workflow RDF、Data RDFの生成・個別検証・修正、両RDF間のCross Review、対話式Human Review、Human Reviewに基づく最終RDF確定までを1コマンドで実行できます。Rule RDFは定義とWorkflow内の判断条件との境界を整理するため、E2E対象から一時的に除外しています。Rule関連のAgent、Ontology、SHACL、standalone処理は残しています。Web UIとDB保存はまだ実装していません。
 
 ## 実装済み
 
@@ -17,7 +17,7 @@ OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Wor
 - 固定Data/Rule ontologyを参照したRDF生成とData/Rule別のSHACL Shapes生成
 - Data RDFの生成、検証、修正ループ
 - 検証済みData RDFを参照したRule RDFの生成、検証、修正ループ
-- AI生成Cross-SHACLによるWorkflow/Data/Rule RDF間の整合性検証
+- AI生成Cross-SHACLによるE2EのWorkflow/Data RDF間の整合性検証
 - Cross-SHACL違反の原因、修正対象Agent、修正指示の構造化出力
 - Controllerによる対象RDF単位のCross revision、個別SHACL再検証、Self-Review、Cross再検証
 - Python ControllerによるPDFからHuman Review後の最終RDF確定までのEnd-to-End実行
@@ -138,7 +138,7 @@ python -m business_analysis_agents run --pdf inputs\sample.pdf
 PDF
  └─ Scenario RDF
      └─ Workflow RDF + individual validation + Self-Review
-         └─ Data RDF / Rule RDF + individual validation + Self-Review
+         └─ Data RDF + individual validation + Self-Review
              └─ Cross-SHACL validation + Consistency evaluation
                  ├─ violation: targeted RDF revision
                  │   └─ individual SHACL + Self-Review + Cross recheck
@@ -154,9 +154,7 @@ PDF
 - `outputs/workflow/workflow_final.ttl`
 - `outputs/workflow/workflow_self_review.json`
 - `outputs/data_rule/data_final.ttl`
-- `outputs/data_rule/rule_final.ttl`
 - `outputs/data_rule/data_self_review.json`
-- `outputs/data_rule/rule_self_review.json`
 - `outputs/consistency/consistency_evaluation.json`
 - `outputs/consistency/consistency_revision_history.json`
 - `outputs/human_review/human_review.json`
@@ -164,12 +162,11 @@ PDF
 - `outputs/final/scenario_final.ttl`
 - `outputs/final/workflow_final.ttl`
 - `outputs/final/data_final.ttl`
-- `outputs/final/rule_final.ttl`
 - `outputs/final/final_summary.json`
 - `outputs/controller/run_summary.json`
 - `outputs/controller/progress.jsonl`
 
-Workflow/Data/Ruleは、各抽出pipeline内でSHACL・Self-Review・自己修正まで実行したRDFを完成出力としてControllerへ渡します。Self-Review結果は記録として保存しますが、Controllerの品質判定には使用しません。ControllerはCross Consistencyだけを品質判断の材料とし、RDF・必須成果物の欠損、Turtle parse不能、入力読込失敗など、後続処理が技術的に実行できない場合だけfatal failureとして停止します。
+Workflow/Dataは、各抽出pipeline内でSHACL・Self-Review・自己修正まで実行したRDFを完成出力としてControllerへ渡します。Self-Review結果は記録として保存しますが、Controllerの品質判定には使用しません。ControllerはWorkflow/Data間のCross Consistencyだけを品質判断の材料とし、対象RDF・必須成果物の欠損、Turtle parse不能、入力読込失敗など、後続処理が技術的に実行できない場合だけfatal failureとして停止します。E2EではRule成果物の欠損をエラーにしません。
 
 E2E全体の`status`は、問題なく完了した`completed`、未解決事項を保持して最後まで完了した`completed_with_issues`、後続処理不能で停止した`fatal_failed`を区別します。`run_summary.json`にはRDF別のSHACL違反・Self-Review finding、Cross finding数、Human Review要否、fatal errorの有無を保存します。
 
@@ -178,7 +175,7 @@ Workflow、Data、Rule、Self-Review、Cross revision、targeted revisionの最�
 実行中は、共通の進捗Reporterが大フェーズ、API呼び出し前後、検証結果、修正回数と修正対象を表示します。表示にはWindows端末でも扱いやすい`[RUN]`、`[OK]`、`[NG]`、`[WARN]`、`[REV]`、`[DONE]`を使用します。
 
 ```text
-[Phase 2/6] Workflow RDF
+[Phase 2/5] Workflow RDF
   [RUN] Workflow RDF generation
   [OK] Workflow RDF generated (12.4 sec)
   [OK] Workflow SHACL validation passed
@@ -186,9 +183,9 @@ Workflow、Data、Rule、Self-Review、Cross revision、targeted revisionの最�
   [OK] Workflow Self-Review passed
   [DONE] Workflow completed
 
-[Phase 5/6] Cross Consistency
+[Phase 4/5] Cross Consistency
   [NG] Cross validation found 3 violation(s)
-  [REV] Cross revision 1/3 [target: rule]
+  [REV] Cross revision 1/3 [target: data]
   [RUN] Cross re-validation 1/3
   [DONE] Cross Consistency passed
 ```
@@ -302,7 +299,7 @@ outputs/data_rule/
 
 Data/RuleのSHACL revisionとSelf-Review revisionにも、共通の`MAX_REVISION_ITERATIONS`を使用します。
 
-### 6. Workflow / Data / Rule RDF間のCross Reviewを実行
+### 6. Workflow / Data RDF間のCross Reviewを実行
 
 ```powershell
 python -m business_analysis_agents consistency
@@ -405,14 +402,14 @@ PDFから抽出したページ番号付きテキストと固定 `ontology/scenar
 
 ### Consistency Agent
 
-Workflow/Data/Rule RDFと3つの固定Ontologyを入力し、次の2モードで処理します。
+E2EではWorkflow/Data RDFと対応する固定Ontologyを入力し、次の2モードで処理します。standaloneのConsistency CLIは既存Rule処理との互換性のため、Rule RDF一式を指定した従来の実行にも対応します。
 
 - `cross_shacl_generation`: 明示されたRDF間参照・型・URI整合性を検証するCross-SHACLを生成
 - `violation_analysis`: pySHACL違反の原因、修正対象Agent、RDF修正指示を構造化
 
-RDFLibで3 RDFと3 Ontologyをそれぞれ統合してpySHACL検証します。現在の固定Ontologyと生成済みRDFには3 RDF間の直接URI参照がないため、名称類似だけを根拠とした対応付けは行いません。
+RDFLibでE2E対象のWorkflow/Data RDFとOntologyをそれぞれ統合してpySHACL検証します。名称類似だけを根拠とした対応付けは行いません。
 
-Controllerでは、違反分析を`workflow`、`data`、`rule`ごとに集約し、対象RDFにつき1回のrevisionを実行します。revision後は生成済みの個別SHACLで検証してSelf-Reviewを記録し、利用可能なRDFをCross検証へ戻します。Controllerの品質判断にはCross Consistencyだけを使用します。Cross-SHACLは初回に1回だけ生成し、以後は初回ハッシュと一致する同じTTLを再利用します。各反復は`consistency_revision_history.json`へ保存します。
+Controllerでは、違反分析を`workflow`、`data`ごとに集約し、対象RDFにつき1回のrevisionを実行します。revision後は生成済みの個別SHACLで検証してSelf-Reviewを記録し、利用可能なRDFをCross検証へ戻します。Controllerの品質判断にはCross Consistencyだけを使用します。Cross-SHACLは初回に1回だけ生成し、以後は初回ハッシュと一致する同じTTLを再利用します。各反復は`consistency_revision_history.json`へ保存します。
 
 ### Human Review
 
@@ -420,7 +417,7 @@ E2E実行では、Human Reviewで「要修正」が選択された指示を`targ
 
 Human Review revision後は、既存targeted revision内で同じ個別SHACLによる再検証とSelf-Reviewを行い、同じCross-SHACLと保存済みハッシュを使ってCross Consistencyを再評価します。その後は必ずHuman Reviewへ戻り、明示承認または次の修正要求を受け付けます。Human Review revisionは共通の最大反復回数まで実行します。
 
-確定したScenario / Workflow / Data / Rule RDFは`outputs/final/`へ保存します。`final_summary.json`には、最終状態、各RDFのSHACL適合状態、Self-Review状態、Cross Consistency状態、Human Review revisionの有無、revision回数、最終RDFハッシュを記録します。
+E2Eで確定したScenario / Workflow / Data RDFは`outputs/final/`へ保存します。`final_summary.json`には、最終状態、各RDFのSHACL適合状態、Self-Review状態、Cross Consistency状態、Human Review revisionの有無、revision回数、最終RDFハッシュを記録します。
 
 最終状態は次のいずれかです。
 
@@ -441,7 +438,7 @@ RDFの検証はLLMではなくPython側で行います。
 - RDFLib: 固定ontology / AI生成SHACL Shapesの構文・参照整合性検証
 - RDFLib: 固定Ontologyで宣言されていないClass / Propertyの検出
 - pySHACL: SHACL制約検証
-- pySHACL: 3 RDF統合Graphに対するCross-SHACL検証
+- pySHACL: E2EのWorkflow/Data統合Graphに対するCross-SHACL検証
 - Python: 最大反復回数、終了条件、ontology / shapesのハッシュ固定確認
 
 通常のpytestでは実APIを呼びません。

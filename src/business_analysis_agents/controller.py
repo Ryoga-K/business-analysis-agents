@@ -198,7 +198,7 @@ def _group_consistency_repairs(
     if not isinstance(analyses, list) or not isinstance(violations, list):
         raise ValueError("Consistency evaluation has invalid findings data.")
     grouped: dict[AgentName, dict[str, Any]] = {}
-    allowed = (AgentName.WORKFLOW, AgentName.DATA, AgentName.RULE)
+    allowed = (AgentName.WORKFLOW, AgentName.DATA)
     for analysis in analyses:
         if not isinstance(analysis, dict):
             raise ValueError("Consistency violation analysis must be an object.")
@@ -243,7 +243,7 @@ def _group_human_review_repairs(
 ) -> list[dict[str, Any]]:
     """Convert explicit Human Review revision requests into targeted bundles."""
 
-    allowed = (AgentName.WORKFLOW, AgentName.DATA, AgentName.RULE)
+    allowed = (AgentName.WORKFLOW, AgentName.DATA)
     grouped: dict[AgentName, dict[str, Any]] = {}
     for request in human_review.revision_requests:
         target = request.target_agent
@@ -414,7 +414,6 @@ def _collect_all_rdf_issues(
     locations = {
         RdfKind.WORKFLOW: workflow_dir,
         RdfKind.DATA: data_rule_dir,
-        RdfKind.RULE: data_rule_dir,
     }
     return {
         rdf_kind.value: _collect_rdf_issue_summary(
@@ -491,16 +490,13 @@ def _sync_individual_stage_states(
         workflow_stage.status = ControllerStageStatus.COMPLETED
 
     data_issue = summary.individual_rdf_issues.get(RdfKind.DATA.value)
-    rule_issue = summary.individual_rdf_issues.get(RdfKind.RULE.value)
-    data_rule_stage = _stage_result(summary, ControllerStage.DATA_RULE)
-    if data_issue is not None and rule_issue is not None:
-        data_rule_stage.unresolved_shacl_violation_count = sum(
-            issue.shacl_violation_count for issue in (data_issue, rule_issue)
+    data_stage = _stage_result(summary, ControllerStage.DATA)
+    if data_issue is not None:
+        data_stage.unresolved_shacl_violation_count = data_issue.shacl_violation_count
+        data_stage.unresolved_self_review_finding_count = (
+            data_issue.self_review_finding_count
         )
-        data_rule_stage.unresolved_self_review_finding_count = sum(
-            issue.self_review_finding_count for issue in (data_issue, rule_issue)
-        )
-        data_rule_stage.status = ControllerStageStatus.COMPLETED
+        data_stage.status = ControllerStageStatus.COMPLETED
 
 
 def run_human_review_revision(
@@ -517,7 +513,7 @@ def run_human_review_revision(
     human_review_dir: Path,
     workflow_ontology_file: Path | str,
     data_ontology_file: Path | str,
-    rule_ontology_file: Path | str,
+    rule_ontology_file: Path | str | None = None,
     progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Apply Human Review instructions once and re-run fixed validations."""
@@ -547,7 +543,7 @@ def run_human_review_revision(
 
     workflow_file = workflow_dir / "workflow_final.ttl"
     data_file = data_rule_dir / "data_final.ttl"
-    rule_file = data_rule_dir / "rule_final.ttl"
+    rule_file = None
     for bundle in bundles:
         target = AgentName(str(bundle["target_agent"]))
         with progress_operation(
@@ -573,29 +569,27 @@ def run_human_review_revision(
                     workflow_dir / "workflow_shapes_generated.ttl"
                 ),
                 data_shapes_file=data_rule_dir / "data_shapes_generated.ttl",
-                rule_shapes_file=data_rule_dir / "rule_shapes_generated.ttl",
+                rule_shapes_file=None,
                 workflow_ontology_file=workflow_ontology_file,
                 data_ontology_file=data_ontology_file,
-                rule_ontology_file=rule_ontology_file,
+                rule_ontology_file=None,
                 workflow_validation_file=(
                     workflow_dir / "workflow_validation.json"
                 ),
                 data_validation_file=data_rule_dir / "data_validation.json",
-                rule_validation_file=data_rule_dir / "rule_validation.json",
+                rule_validation_file=None,
                 workflow_revision_history_file=(
                     workflow_dir / "workflow_revision_history.json"
                 ),
                 data_revision_history_file=(
                     data_rule_dir / "data_revision_history.json"
                 ),
-                rule_revision_history_file=(
-                    data_rule_dir / "rule_revision_history.json"
-                ),
+                rule_revision_history_file=None,
                 workflow_self_review_file=(
                     workflow_dir / "workflow_self_review.json"
                 ),
                 data_self_review_file=data_rule_dir / "data_self_review.json",
-                rule_self_review_file=data_rule_dir / "rule_self_review.json",
+                rule_self_review_file=None,
                 progress=progress,
             )
         result["revision_results"].append(revision_result)
@@ -619,14 +613,14 @@ def run_human_review_revision(
         model=model,
         workflow_file=workflow_file,
         data_file=data_file,
-        rule_file=rule_file,
+        rule_file=None,
         workflow_validation_file=workflow_dir / "workflow_validation.json",
         data_validation_file=data_rule_dir / "data_validation.json",
-        rule_validation_file=data_rule_dir / "rule_validation.json",
+        rule_validation_file=None,
         output_dir=consistency_dir,
         workflow_ontology_file=workflow_ontology_file,
         data_ontology_file=data_ontology_file,
-        rule_ontology_file=rule_ontology_file,
+        rule_ontology_file=None,
         cross_shacl_file=consistency_dir / "consistency_shapes_generated.ttl",
         expected_cross_shapes_hash=cross_shapes_hash,
         progress=progress,
@@ -671,7 +665,6 @@ def _save_final_artifacts(
         "scenario": Path(scenario_file),
         "workflow": workflow_dir / "workflow_final.ttl",
         "data": data_rule_dir / "data_final.ttl",
-        "rule": data_rule_dir / "rule_final.ttl",
     }
     destination_files = {
         name: final_dir / f"{name}_final.ttl" for name in source_files
@@ -693,9 +686,6 @@ def _save_final_artifacts(
         "data": _load_json_object(
             data_rule_dir / "data_validation.json", "Data validation"
         ),
-        "rule": _load_json_object(
-            data_rule_dir / "rule_validation.json", "Rule validation"
-        ),
     }
     self_reviews = {
         "workflow": _load_json_object(
@@ -704,16 +694,12 @@ def _save_final_artifacts(
         "data": _load_json_object(
             data_rule_dir / "data_self_review.json", "Data Self-Review"
         ),
-        "rule": _load_json_object(
-            data_rule_dir / "rule_self_review.json", "Rule Self-Review"
-        ),
     }
     revision_counts = {
         "workflow": _history_length(
             workflow_dir / "workflow_revision_history.json"
         ),
         "data": _history_length(data_rule_dir / "data_revision_history.json"),
-        "rule": _history_length(data_rule_dir / "rule_revision_history.json"),
         "cross": int(consistency_revision_history.get("revision_rounds", 0)),
         "human_review_targets": len(
             human_review_revision.get("revision_results", [])
@@ -754,7 +740,7 @@ def _save_final_artifacts(
             human_review_revision.get("revision_performed")
         ),
         revision_count=sum(
-            revision_counts[name] for name in ("workflow", "data", "rule")
+            revision_counts[name] for name in ("workflow", "data")
         ),
         revision_counts=revision_counts,
         final_rdf_hashes={
@@ -780,12 +766,10 @@ def _save_final_artifacts(
 def _rdf_hashes(
     workflow_file: Path,
     data_file: Path,
-    rule_file: Path,
 ) -> dict[str, str]:
     return {
         "workflow": content_hash(workflow_file.read_text(encoding="utf-8")),
         "data": content_hash(data_file.read_text(encoding="utf-8")),
-        "rule": content_hash(rule_file.read_text(encoding="utf-8")),
     }
 
 
@@ -799,14 +783,13 @@ def run_consistency_revision_loop(
     consistency_dir: Path,
     workflow_ontology_file: Path | str,
     data_ontology_file: Path | str,
-    rule_ontology_file: Path | str,
+    rule_ontology_file: Path | str | None = None,
     progress: ProgressReporter | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run Cross Consistency and bounded targeted revision rounds."""
 
     workflow_file = workflow_dir / "workflow_final.ttl"
     data_file = data_rule_dir / "data_final.ttl"
-    rule_file = data_rule_dir / "rule_final.ttl"
     cross_shapes_file = consistency_dir / "consistency_shapes_generated.ttl"
     history_file = consistency_dir / "consistency_revision_history.json"
 
@@ -814,14 +797,14 @@ def run_consistency_revision_loop(
         model=model,
         workflow_file=workflow_file,
         data_file=data_file,
-        rule_file=rule_file,
+        rule_file=None,
         workflow_validation_file=workflow_dir / "workflow_validation.json",
         data_validation_file=data_rule_dir / "data_validation.json",
-        rule_validation_file=data_rule_dir / "rule_validation.json",
+        rule_validation_file=None,
         output_dir=consistency_dir,
         workflow_ontology_file=workflow_ontology_file,
         data_ontology_file=data_ontology_file,
-        rule_ontology_file=rule_ontology_file,
+        rule_ontology_file=None,
         progress=progress,
     )
     cross_shapes_hash = str(consistency_result.get("cross_shapes_hash", ""))
@@ -848,7 +831,7 @@ def run_consistency_revision_loop(
             "cross_conforms": conforms,
             "cross_status": consistency_result.get("final_status"),
             "cross_shapes_hash": cross_shapes_hash,
-            "rdf_hashes": _rdf_hashes(workflow_file, data_file, rule_file),
+            "rdf_hashes": _rdf_hashes(workflow_file, data_file),
             "repair_bundles": bundles,
             "revision_results": [],
         }
@@ -912,34 +895,32 @@ def run_consistency_revision_loop(
                     model=model,
                     workflow_file=workflow_file,
                     data_file=data_file,
-                    rule_file=rule_file,
+                    rule_file=None,
                     workflow_shapes_file=(
                         workflow_dir / "workflow_shapes_generated.ttl"
                     ),
                     data_shapes_file=data_rule_dir / "data_shapes_generated.ttl",
-                    rule_shapes_file=data_rule_dir / "rule_shapes_generated.ttl",
+                    rule_shapes_file=None,
                     workflow_ontology_file=workflow_ontology_file,
                     data_ontology_file=data_ontology_file,
-                    rule_ontology_file=rule_ontology_file,
+                    rule_ontology_file=None,
                     workflow_validation_file=(
                         workflow_dir / "workflow_validation.json"
                     ),
                     data_validation_file=data_rule_dir / "data_validation.json",
-                    rule_validation_file=data_rule_dir / "rule_validation.json",
+                    rule_validation_file=None,
                     workflow_revision_history_file=(
                         workflow_dir / "workflow_revision_history.json"
                     ),
                     data_revision_history_file=(
                         data_rule_dir / "data_revision_history.json"
                     ),
-                    rule_revision_history_file=(
-                        data_rule_dir / "rule_revision_history.json"
-                    ),
+                    rule_revision_history_file=None,
                     workflow_self_review_file=(
                         workflow_dir / "workflow_self_review.json"
                     ),
                     data_self_review_file=data_rule_dir / "data_self_review.json",
-                    rule_self_review_file=data_rule_dir / "rule_self_review.json",
+                    rule_self_review_file=None,
                     progress=progress,
                 )
             revision_results.append(result)
@@ -949,7 +930,6 @@ def run_consistency_revision_loop(
         record["rdf_hashes_after_revision"] = _rdf_hashes(
             workflow_file,
             data_file,
-            rule_file,
         )
         iteration_history.append(record)
         write_json(history_file, history)
@@ -980,14 +960,14 @@ def run_consistency_revision_loop(
             model=model,
             workflow_file=workflow_file,
             data_file=data_file,
-            rule_file=rule_file,
+            rule_file=None,
             workflow_validation_file=workflow_dir / "workflow_validation.json",
             data_validation_file=data_rule_dir / "data_validation.json",
-            rule_validation_file=data_rule_dir / "rule_validation.json",
+            rule_validation_file=None,
             output_dir=consistency_dir,
             workflow_ontology_file=workflow_ontology_file,
             data_ontology_file=data_ontology_file,
-            rule_ontology_file=rule_ontology_file,
+            rule_ontology_file=None,
             cross_shacl_file=cross_shapes_file,
             expected_cross_shapes_hash=cross_shapes_hash,
             progress=progress,
@@ -1025,7 +1005,7 @@ def run_end_to_end_controller(
         for stage in (
             ControllerStage.SCENARIO,
             ControllerStage.WORKFLOW,
-            ControllerStage.DATA_RULE,
+            ControllerStage.DATA,
             ControllerStage.CONSISTENCY,
             ControllerStage.HUMAN_REVIEW,
         )
@@ -1042,7 +1022,7 @@ def run_end_to_end_controller(
     _save_controller_summary(summary, summary_path)
 
     scenario_stage = _stage_result(summary, ControllerStage.SCENARIO)
-    progress_reporter.phase(1, 6, "Scenario RDF", "scenario")
+    progress_reporter.phase(1, 5, "Scenario RDF", "scenario")
     try:
         scenario_result = run_scenario_pipeline(
             pdf_file=pdf_file,
@@ -1086,7 +1066,7 @@ def run_end_to_end_controller(
     _save_controller_summary(summary, summary_path)
 
     workflow_stage = _stage_result(summary, ControllerStage.WORKFLOW)
-    progress_reporter.phase(2, 6, "Workflow RDF", "workflow")
+    progress_reporter.phase(2, 5, "Workflow RDF", "workflow")
     try:
         workflow_result = run_workflow_pipeline(
             scenario_file=scenario_file,
@@ -1151,7 +1131,7 @@ def run_end_to_end_controller(
     )
     _save_controller_summary(summary, summary_path)
 
-    data_rule_stage = _stage_result(summary, ControllerStage.DATA_RULE)
+    data_stage = _stage_result(summary, ControllerStage.DATA)
     try:
         data_rule_result = run_data_rule_pipeline(
             scenario_file=scenario_file,
@@ -1159,32 +1139,27 @@ def run_end_to_end_controller(
             pdf_file=pdf_file,
             output_dir=data_rule_dir,
             data_ontology_file=data_ontology_file,
-            rule_ontology_file=rule_ontology_file,
             progress=progress_reporter,
+            include_rule=False,
         )
     except Exception as error:
         return _finish_failed_run(
             summary,
             summary_path,
-            ControllerStage.DATA_RULE,
+            ControllerStage.DATA,
             type(error).__name__,
             str(error),
             progress=progress_reporter,
         )
-    data_rule_stage.pipeline_status = "completed"
-    data_rule_stage.output_files = {
+    data_stage.pipeline_status = "completed"
+    data_stage.output_files = {
         "data_rdf": str(data_rule_dir / "data_final.ttl"),
         "data_shapes": str(data_rule_dir / "data_shapes_generated.ttl"),
         "data_validation": str(data_rule_dir / "data_validation.json"),
         "data_revision_history": str(data_rule_dir / "data_revision_history.json"),
         "data_self_review": str(data_rule_dir / "data_self_review.json"),
-        "rule_rdf": str(data_rule_dir / "rule_final.ttl"),
-        "rule_shapes": str(data_rule_dir / "rule_shapes_generated.ttl"),
-        "rule_validation": str(data_rule_dir / "rule_validation.json"),
-        "rule_revision_history": str(data_rule_dir / "rule_revision_history.json"),
-        "rule_self_review": str(data_rule_dir / "rule_self_review.json"),
     }
-    summary.output_files.update(data_rule_stage.output_files)
+    summary.output_files.update(data_stage.output_files)
     try:
         data_issue = _collect_rdf_issue_summary(
             rdf_kind=RdfKind.DATA,
@@ -1194,40 +1169,25 @@ def run_end_to_end_controller(
             self_review_file=data_rule_dir / "data_self_review.json",
             revision_history_file=data_rule_dir / "data_revision_history.json",
         )
-        rule_issue = _collect_rdf_issue_summary(
-            rdf_kind=RdfKind.RULE,
-            rdf_file=data_rule_dir / "rule_final.ttl",
-            shapes_file=data_rule_dir / "rule_shapes_generated.ttl",
-            validation_file=data_rule_dir / "rule_validation.json",
-            self_review_file=data_rule_dir / "rule_self_review.json",
-            revision_history_file=data_rule_dir / "rule_revision_history.json",
-        )
     except Exception as error:
         return _finish_failed_run(
             summary,
             summary_path,
-            ControllerStage.DATA_RULE,
+            ControllerStage.DATA,
             type(error).__name__,
             str(error),
             progress=progress_reporter,
         )
-    summary.individual_rdf_issues.update(
-        {
-            RdfKind.DATA.value: data_issue,
-            RdfKind.RULE.value: rule_issue,
-        }
+    summary.individual_rdf_issues[RdfKind.DATA.value] = data_issue
+    data_stage.unresolved_shacl_violation_count = data_issue.shacl_violation_count
+    data_stage.unresolved_self_review_finding_count = (
+        data_issue.self_review_finding_count
     )
-    data_rule_stage.unresolved_shacl_violation_count = sum(
-        issue.shacl_violation_count for issue in (data_issue, rule_issue)
-    )
-    data_rule_stage.unresolved_self_review_finding_count = sum(
-        issue.self_review_finding_count for issue in (data_issue, rule_issue)
-    )
-    data_rule_stage.status = ControllerStageStatus.COMPLETED
+    data_stage.status = ControllerStageStatus.COMPLETED
     _save_controller_summary(summary, summary_path)
 
     consistency_stage = _stage_result(summary, ControllerStage.CONSISTENCY)
-    progress_reporter.phase(5, 6, "Cross Consistency", "consistency")
+    progress_reporter.phase(4, 5, "Cross Consistency", "consistency")
     try:
         consistency_result, consistency_history = run_consistency_revision_loop(
             model=model,
@@ -1238,7 +1198,6 @@ def run_end_to_end_controller(
             consistency_dir=consistency_dir,
             workflow_ontology_file=workflow_ontology_file,
             data_ontology_file=data_ontology_file,
-            rule_ontology_file=rule_ontology_file,
             progress=progress_reporter,
         )
     except Exception as error:
@@ -1325,7 +1284,7 @@ def run_end_to_end_controller(
     _save_controller_summary(summary, summary_path)
 
     human_review_stage = _stage_result(summary, ControllerStage.HUMAN_REVIEW)
-    progress_reporter.phase(6, 6, "Human Review / Finalization", "finalization")
+    progress_reporter.phase(5, 5, "Human Review / Finalization", "finalization")
     human_review_file = root / "human_review" / "human_review.json"
     human_review_stage.output_files = {
         "human_review": str(human_review_file),
@@ -1360,7 +1319,7 @@ def run_end_to_end_controller(
             human_review = run_human_review(
                 workflow_file=workflow_dir / "workflow_final.ttl",
                 data_file=data_rule_dir / "data_final.ttl",
-                rule_file=data_rule_dir / "rule_final.ttl",
+                rule_file=None,
                 consistency_evaluation_file=(
                     consistency_dir / "consistency_evaluation.json"
                 ),
@@ -1430,7 +1389,7 @@ def run_end_to_end_controller(
                 human_review_dir=root / "human_review",
                 workflow_ontology_file=workflow_ontology_file,
                 data_ontology_file=data_ontology_file,
-                rule_ontology_file=rule_ontology_file,
+                rule_ontology_file=None,
                 progress=progress_reporter,
             )
             human_revision["revision_performed"] = True

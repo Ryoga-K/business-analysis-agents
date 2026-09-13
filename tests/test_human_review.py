@@ -46,7 +46,7 @@ def _write_evaluation(tmp_path, evaluation):
 def test_human_review_requires_explicit_approval_without_findings(tmp_path) -> None:
     """A conforming Cross result still requires explicit human approval."""
 
-    workflow, data, rule = _write_rdf_inputs(tmp_path)
+    workflow, data, _ = _write_rdf_inputs(tmp_path)
     evaluation_file = _write_evaluation(
         tmp_path,
         ConsistencyEvaluationResult(
@@ -62,7 +62,7 @@ def test_human_review_requires_explicit_approval_without_findings(tmp_path) -> N
     report = run_human_review(
         workflow_file=workflow,
         data_file=data,
-        rule_file=rule,
+        rule_file=None,
         consistency_evaluation_file=evaluation_file,
         output_file=output_file,
         input_func=lambda prompt: "1",
@@ -81,6 +81,7 @@ def test_human_review_requires_explicit_approval_without_findings(tmp_path) -> N
     assert saved["input_received"] is True
     assert saved["approved"] is True
     assert saved["consistency_conforms"] is True
+    assert saved["rule_rdf_file"] is None
 
     invalid = report.model_dump(mode="json")
     invalid["input_received"] = False

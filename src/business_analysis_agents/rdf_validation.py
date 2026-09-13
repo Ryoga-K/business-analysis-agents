@@ -327,24 +327,27 @@ def validate_workflow_rdf(
 def validate_cross_rdf(
     workflow_turtle: str,
     data_turtle: str,
-    rule_turtle: str,
+    rule_turtle: str | None,
     workflow_ontology_turtle: str,
     data_ontology_turtle: str,
-    rule_ontology_turtle: str,
+    rule_ontology_turtle: str | None,
     cross_shacl_turtle: str,
 ) -> CrossRdfValidationResult:
-    """Merge three RDF graphs and validate their relationships with Cross-SHACL."""
+    """Merge the supplied RDF graphs and validate relationships with Cross-SHACL."""
 
-    rdf_inputs = (
+    rdf_inputs = [
         ("Workflow RDF", workflow_turtle),
         ("Data RDF", data_turtle),
-        ("Rule RDF", rule_turtle),
-    )
-    ontology_inputs = (
+    ]
+    ontology_inputs = [
         ("Workflow ontology", workflow_ontology_turtle),
         ("Data ontology", data_ontology_turtle),
-        ("Rule ontology", rule_ontology_turtle),
-    )
+    ]
+    if rule_turtle is not None or rule_ontology_turtle is not None:
+        if rule_turtle is None or rule_ontology_turtle is None:
+            raise ValueError("Rule RDF and Rule ontology must be supplied together.")
+        rdf_inputs.append(("Rule RDF", rule_turtle))
+        ontology_inputs.append(("Rule ontology", rule_ontology_turtle))
     rdf_graphs: list[Graph] = []
     ontology_graphs: list[Graph] = []
     parse_errors: list[RdfParseError] = []

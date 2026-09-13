@@ -632,24 +632,35 @@ def run_data_rule_pipeline(
     data_ontology_file: Path | str = DEFAULT_DATA_ONTOLOGY,
     rule_ontology_file: Path | str = DEFAULT_RULE_ONTOLOGY,
     progress: ProgressReporter | None = None,
+    include_rule: bool = True,
 ) -> dict[str, Any]:
-    """Generate Data/Rule RDF and one immutable SHACL graph for each RDF."""
+    """Generate Data RDF and optionally retain the standalone Rule flow."""
 
     scenario_path = Path(scenario_file)
     data_rule_dir = Path(output_dir)
     data_rule_dir.mkdir(parents=True, exist_ok=True)
     if progress is not None:
-        progress.phase(3, 6, "Data RDF", "data")
+        progress.phase(3, 6 if include_rule else 5, "Data RDF", "data")
     (data_rule_dir / "data_shapes_generated.ttl").unlink(missing_ok=True)
-    (data_rule_dir / "rule_shapes_generated.ttl").unlink(missing_ok=True)
+    if not include_rule:
+        for stale_rule_file in (
+            "rule_final.ttl",
+            "rule_shapes_generated.ttl",
+            "rule_validation.json",
+            "rule_revision_history.json",
+            "rule_self_review.json",
+        ):
+            (data_rule_dir / stale_rule_file).unlink(missing_ok=True)
+    else:
+        (data_rule_dir / "rule_shapes_generated.ttl").unlink(missing_ok=True)
     scenario_turtle = load_scenario_rdf(scenario_path)
     pdf_path = Path(pdf_file)
     with progress_operation(
         progress,
         phase="data",
         step="pdf_text_extraction",
-        message="Data/Rule source document loading",
-        completed_message="Data/Rule source document loaded",
+        message="Data source document loading",
+        completed_message="Data source document loaded",
     ):
         source_document = load_pdf_document(pdf_path)
     source_document_payload = source_document.model_dump(
@@ -660,11 +671,7 @@ def run_data_rule_pipeline(
     data_ontology_path, data_ontology = load_fixed_turtle(
         data_ontology_file, "Data ontology"
     )
-    rule_ontology_path, rule_ontology = load_fixed_turtle(
-        rule_ontology_file, "Rule ontology"
-    )
     data_ontology_hash = content_hash(data_ontology)
-    rule_ontology_hash = content_hash(rule_ontology)
 
     (
         initial_data_turtle,
@@ -704,8 +711,47 @@ def run_data_rule_pipeline(
         ),
         message="Data completed",
     )
+    if not include_rule:
+        final_status = (
+            "completed"
+            if data_validation.conforms
+            and data_ontology_validation.conforms
+            and data_self_review.status is SelfReviewRunStatus.PASSED
+            else "needs_review"
+        )
+        metadata = {
+            "scenario_file": str(scenario_path),
+            "pdf_file": str(pdf_path),
+            "execution_datetime": datetime.now().isoformat(),
+            "model": model,
+            "agent_name": "related_data_rule_agent",
+            "included_rdfs": ["data"],
+            "data_ontology_source_file": str(data_ontology_path),
+            "data_shapes_source": "ai_generated",
+            "data_shapes_file": str(
+                data_rule_dir / "data_shapes_generated.ttl"
+            ),
+            "data_ontology_hash": data_ontology_hash,
+            "data_shapes_hash": data_shapes_hash,
+            "max_data_iterations": MAX_REVISION_ITERATIONS,
+            "max_data_self_review_iterations": MAX_REVISION_ITERATIONS,
+            "data_self_review_status": data_self_review.status.value,
+            "final_status": final_status,
+        }
+        return {
+            "output_dir": str(data_rule_dir),
+            "final_status": final_status,
+            "data_validation": _validation_payload(data_validation),
+            "data_self_review": data_self_review.model_dump(mode="json"),
+            "metadata": metadata,
+        }
+
     if progress is not None:
         progress.phase(4, 6, "Rule RDF", "rule")
+    rule_ontology_path, rule_ontology = load_fixed_turtle(
+        rule_ontology_file, "Rule ontology"
+    )
+    rule_ontology_hash = content_hash(rule_ontology)
 
     (
         initial_rule_turtle,

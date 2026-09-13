@@ -19,11 +19,11 @@ from business_analysis_agents.models import (
 CONSISTENCY_AGENT_NAME = "consistency_agent"
 
 BASE_CONSISTENCY_INSTRUCTIONS = """
-あなたはWorkflow RDF、Data RDF、Rule RDF間の整合性を評価するConsistency Agentです。
+あなたは入力された複数のRDF間の整合性を評価するConsistency Agentです。
 
 全体ルール:
 - 適合判定はPythonのpySHACLが行います。あなた自身が適合・不適合を決定しないでください。
-- 入力された3つの固定Ontologyを変更しないでください。
+- 入力された固定Ontologyを変更しないでください。
 - RDFやOntologyに存在しないClass、Property、対応関係を推測しないでください。
 - 名前や説明が似ているだけの別URIを、同一リソースとして扱わないでください。
 - RDF間に明示的な参照または対応付け語彙がない場合、その対応を必須にしないでください。
@@ -33,7 +33,7 @@ BASE_CONSISTENCY_INSTRUCTIONS = """
 
 CROSS_SHACL_GENERATION_INSTRUCTIONS = """
 Mode: cross_shacl_generation
-Workflow RDF、Data RDF、Rule RDFと、それぞれの固定Ontologyから、
+入力されたRDFと、それぞれに対応する固定Ontologyから、
 RDF間整合性を検証するCross-SHACL Shapesを生成してください。
 
 検証対象:
@@ -62,7 +62,7 @@ pySHACLが返したCross-SHACL違反を、入力RDFと固定Ontologyだけを根
 - violation_indexは入力の違反番号と一致させてください。
 - target_resourceには違反のfocus_nodeを基本として設定してください。
 - causeには、どの明示的参照・型・Ontology制約が不整合かを記載してください。
-- target_agentはworkflow、data、ruleのいずれかにしてください。
+- target_agentは入力ペイロードの修正対象候補から選択してください。
 - repair_instructionは対象AgentがRDFだけを修正する具体的な指示にしてください。
 - OntologyやCross-SHACLの変更を修正指示に含めないでください。
 - 根拠のないリソースを追加するよう指示しないでください。
@@ -110,8 +110,12 @@ def build_consistency_prompt(
 ) -> str:
     """Build a mode-specific Consistency Agent prompt."""
 
+    repair_targets = ["workflow", "data"]
+    if payload.get("rule_rdf_turtle") is not None:
+        repair_targets.append("rule")
     return (
         f"{_mode_instructions(mode)}\n\n"
+        f"修正対象候補: {', '.join(repair_targets)}\n"
         f"mode='{mode.value}' のConsistencyAgentOutputを返してください。"
         "JSONキーを重複させないでください。不要なフィールドは省略してください。\n\n"
         f"入力ペイロード:\n{payload}"

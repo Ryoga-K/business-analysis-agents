@@ -94,6 +94,17 @@ cross:RuleReferenceShape a sh:NodeShape ;
     sh:property [ sh:path rule:usesData ; sh:class data:DataEntity ] .
 """.strip()
 
+WORKFLOW_DATA_CROSS_SHAPES = """
+@prefix cross: <http://example.org/cross-shapes#> .
+@prefix wf: <http://example.org/workflow#> .
+@prefix data: <http://example.org/data#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+cross:WorkflowDataReferenceShape a sh:NodeShape ;
+    sh:targetClass wf:Activity ;
+    sh:property [ sh:path wf:usesData ; sh:class data:DataEntity ] .
+""".strip()
+
 
 def _write_inputs(tmp_path, workflow_rdf: str = WORKFLOW_RDF):
     values = {
@@ -174,6 +185,108 @@ def test_validate_cross_rdf_merges_all_three_graphs() -> None:
     assert validation.conforms
     assert validation.shacl_result is not None
     assert validation.shacl_result.violations == []
+
+
+def test_validate_cross_rdf_merges_workflow_and_data_without_rule() -> None:
+    """Cross-SHACL validation accepts the E2E Workflow/Data graph pair."""
+
+    validation = validate_cross_rdf(
+        WORKFLOW_RDF,
+        DATA_RDF,
+        None,
+        WORKFLOW_ONTOLOGY,
+        DATA_ONTOLOGY,
+        None,
+        CROSS_SHAPES,
+    )
+
+    assert validation.conforms
+    assert validation.shacl_result is not None
+    assert validation.shacl_result.violations == []
+
+
+def test_consistency_pipeline_does_not_require_rule_inputs(monkeypatch, tmp_path) -> None:
+    """The E2E Cross pipeline sends only Workflow/Data RDFs to the Agent."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    paths = _write_inputs(tmp_path)
+
+    def fake_runner(_agent, prompt):
+        assert "workflow_rdf_turtle" in prompt
+        assert "data_rdf_turtle" in prompt
+        assert "rule_rdf_turtle" not in prompt
+        assert "修正対象候補: workflow, data" in prompt
+        return SimpleNamespace(
+            final_output=ConsistencyAgentOutput(
+                mode=ConsistencyAgentMode.CROSS_SHACL_GENERATION,
+                cross_shacl_turtle=WORKFLOW_DATA_CROSS_SHAPES,
+            )
+        )
+
+    result = run_consistency_pipeline(
+        model="gpt-test",
+        workflow_file=paths["workflow.ttl"],
+        data_file=paths["data.ttl"],
+        rule_file=None,
+        workflow_validation_file=paths["workflow_validation.json"],
+        data_validation_file=paths["data_validation.json"],
+        output_dir=tmp_path / "consistency-data-only",
+        workflow_ontology_file=paths["workflow_ontology.ttl"],
+        data_ontology_file=paths["data_ontology.ttl"],
+        runner=fake_runner,
+    )
+
+    assert result["final_status"] == "completed"
+    assert "rule_file" not in result
+    assert "rule_validation_file" not in result
+    assert "rule_ontology_file" not in result
+
+
+def test_data_only_consistency_rejects_rule_repair_target(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Violation analysis cannot route an E2E repair to the excluded Rule Agent."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    paths = _write_inputs(tmp_path, workflow_rdf=INVALID_WORKFLOW_RDF)
+
+    def fake_runner(_agent, prompt):
+        if "cross_shacl_generation" in prompt:
+            return SimpleNamespace(
+                final_output=ConsistencyAgentOutput(
+                    mode=ConsistencyAgentMode.CROSS_SHACL_GENERATION,
+                    cross_shacl_turtle=WORKFLOW_DATA_CROSS_SHAPES,
+                )
+            )
+        return SimpleNamespace(
+            final_output=ConsistencyAgentOutput(
+                mode=ConsistencyAgentMode.VIOLATION_ANALYSIS,
+                violation_analyses=[
+                    ConsistencyViolationAnalysis(
+                        violation_index=0,
+                        target_resource="http://example.org/instance/missing-document",
+                        cause="The Workflow reference is missing from Data RDF.",
+                        target_agent=AgentName.RULE,
+                        repair_instruction="Do not route this to Rule.",
+                    )
+                ],
+            )
+        )
+
+    with pytest.raises(ValueError, match="unsupported repair targets.*rule"):
+        run_consistency_pipeline(
+            model="gpt-test",
+            workflow_file=paths["workflow.ttl"],
+            data_file=paths["data.ttl"],
+            rule_file=None,
+            workflow_validation_file=paths["workflow_validation.json"],
+            data_validation_file=paths["data_validation.json"],
+            output_dir=tmp_path / "invalid-rule-target",
+            workflow_ontology_file=paths["workflow_ontology.ttl"],
+            data_ontology_file=paths["data_ontology.ttl"],
+            runner=fake_runner,
+        )
 
 
 def test_consistency_pipeline_saves_shapes_and_conforming_result(

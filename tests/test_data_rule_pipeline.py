@@ -495,6 +495,65 @@ def test_pipeline_generates_data_then_rule_and_saves_outputs(monkeypatch, tmp_pa
     }
 
 
+def test_pipeline_can_generate_data_without_running_rule(monkeypatch, tmp_path) -> None:
+    """The E2E data-only path never invokes a Rule Agent mode."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    scenario_file = tmp_path / "scenario_final.ttl"
+    scenario_file.write_text(_scenario_turtle(), encoding="utf-8")
+    data_ontology_file, _, _, _ = _write_fixed_files(tmp_path)
+    pdf_file = _write_source_pdf(tmp_path)
+    call_order: list[str] = []
+
+    def fake_runner(_agent, prompt):
+        if prompt.startswith("Mode: rule_"):
+            pytest.fail("Rule mode was invoked by the data-only pipeline")
+        if "data_shacl_generation" in prompt:
+            call_order.append("data_shacl_generation")
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SHACL_GENERATION,
+                    data_shacl_turtle=DATA_SHAPES_TTL,
+                )
+            )
+        if prompt.startswith("Mode: data_self_review"):
+            call_order.append("data_self_review")
+            return SimpleNamespace(
+                final_output=DataRuleAgentOutput(
+                    mode=DataRuleAgentMode.DATA_SELF_REVIEW,
+                    self_review_result=_semantic_review(AgentName.DATA, RdfKind.DATA),
+                )
+            )
+        call_order.append("data_generation")
+        return SimpleNamespace(
+            final_output=DataRuleAgentOutput(
+                mode=DataRuleAgentMode.DATA_GENERATION,
+                data_rdf_turtle=VALID_DATA_TTL,
+            )
+        )
+
+    output_dir = tmp_path / "data_only"
+    result = run_data_rule_pipeline(
+        scenario_file,
+        model="gpt-test",
+        pdf_file=pdf_file,
+        output_dir=output_dir,
+        runner=fake_runner,
+        data_ontology_file=data_ontology_file,
+        rule_ontology_file=tmp_path / "missing-rule-ontology.ttl",
+        include_rule=False,
+    )
+
+    assert call_order == [
+        "data_generation",
+        "data_shacl_generation",
+        "data_self_review",
+    ]
+    assert result["final_status"] == "completed"
+    assert result["metadata"]["included_rdfs"] == ["data"]
+    assert not any(path.name.startswith("rule_") for path in output_dir.iterdir())
+
+
 def test_pipeline_saves_data_outputs_before_rule_processing(monkeypatch, tmp_path) -> None:
     """Completed Data artifacts remain available when Rule processing fails."""
 

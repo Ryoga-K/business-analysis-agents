@@ -104,6 +104,7 @@ class ControllerStage(str, Enum):
 
     SCENARIO = "scenario"
     WORKFLOW = "workflow"
+    DATA = "data"
     DATA_RULE = "data_rule"
     CONSISTENCY = "consistency"
     HUMAN_REVIEW = "human_review"
@@ -662,10 +663,10 @@ class ConsistencyEvaluationInput(StrictBaseModel):
 
     workflow_rdf_turtle: str = Field(min_length=1)
     data_rdf_turtle: str = Field(min_length=1)
-    rule_rdf_turtle: str = Field(min_length=1)
+    rule_rdf_turtle: str | None = None
     workflow_ontology_turtle: str = Field(min_length=1)
     data_ontology_turtle: str = Field(min_length=1)
-    rule_ontology_turtle: str = Field(min_length=1)
+    rule_ontology_turtle: str | None = None
     cross_shacl_turtle: str | None = None
     validation_result: ShaclValidationResult | None = None
 
@@ -813,7 +814,7 @@ class HumanReviewReport(StrictBaseModel):
     consistency_conforms: bool
     workflow_rdf_file: str = Field(min_length=1)
     data_rdf_file: str = Field(min_length=1)
-    rule_rdf_file: str = Field(min_length=1)
+    rule_rdf_file: str | None = None
     consistency_evaluation_file: str = Field(min_length=1)
     groups: list[HumanReviewGroupResult] = Field(default_factory=list)
     findings: list[HumanReviewFindingResult] = Field(default_factory=list)

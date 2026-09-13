@@ -160,17 +160,24 @@ def _request_final_decision(
 def _request_manual_revision(
     input_func: Callable[[str], str],
     output_func: Callable[[str], None],
+    *,
+    include_rule: bool,
 ) -> HumanReviewRevisionRequest:
     output_func("修正対象Agentを選択してください。")
     output_func("1. workflow")
     output_func("2. data")
-    output_func("3. rule")
+    if include_rule:
+        output_func("3. rule")
+    allowed_inputs = {"1", "2", "3"} if include_rule else {"1", "2"}
     while True:
-        selected = _read_cli_input(input_func, "修正対象を選択してください [1-3]: ")
+        choices = "1-3" if include_rule else "1-2"
+        selected = _read_cli_input(
+            input_func, f"修正対象を選択してください [{choices}]: "
+        )
         target = TARGET_AGENT_BY_INPUT.get(selected)
-        if target is not None:
+        if target is not None and selected in allowed_inputs:
             break
-        output_func("1から3の数字を入力してください。")
+        output_func(f"{choices}の数字を入力してください。")
     instruction = _request_comment(
         input_func,
         output_func,
@@ -246,7 +253,7 @@ def _common_text(
 def run_human_review(
     workflow_file: Path | str = DEFAULT_WORKFLOW_RDF,
     data_file: Path | str = DEFAULT_DATA_RDF,
-    rule_file: Path | str = DEFAULT_RULE_RDF,
+    rule_file: Path | str | None = DEFAULT_RULE_RDF,
     consistency_evaluation_file: Path | str = DEFAULT_CONSISTENCY_EVALUATION,
     output_file: Path | str = DEFAULT_HUMAN_REVIEW_OUTPUT,
     reviewer: str | None = None,
@@ -263,19 +270,34 @@ def run_human_review(
     source_candidates = {
         Path(workflow_file).resolve(),
         Path(data_file).resolve(),
-        Path(rule_file).resolve(),
         Path(consistency_evaluation_file).resolve(),
     }
+    if rule_file is not None:
+        source_candidates.add(Path(rule_file).resolve())
     if destination.resolve() in source_candidates:
         raise ValueError("Human Review output must not overwrite an input file.")
     destination.unlink(missing_ok=True)
     workflow_path, _ = _load_required_text(workflow_file, "Workflow RDF")
     data_path, _ = _load_required_text(data_file, "Data RDF")
-    rule_path, _ = _load_required_text(rule_file, "Rule RDF")
+    rule_path: Path | None = None
+    if rule_file is not None:
+        rule_path, _ = _load_required_text(rule_file, "Rule RDF")
     evaluation_path, evaluation = _load_consistency_evaluation(
         consistency_evaluation_file
     )
     finding_pairs = _validated_finding_pairs(evaluation)
+    if rule_path is None and any(
+        analysis.target_agent is AgentName.RULE
+        for _, _, analysis in finding_pairs
+    ):
+        raise ValueError(
+            "Consistency evaluation contains a Rule target without a Rule RDF."
+        )
+    if rule_path is None and any(
+        analysis.target_agent is AgentName.RULE
+        for _, _, analysis in finding_pairs
+    ):
+        raise ValueError("Cross evaluation selected Rule in a Workflow/Data review.")
     grouped_findings = group_consistency_findings(finding_pairs)
     group_results: list[HumanReviewGroupResult] = []
     findings: list[HumanReviewFindingResult] = []
@@ -374,7 +396,13 @@ def run_human_review(
             for target, values in requests_by_target.items()
         ]
     elif revision_requested:
-        revision_requests = [_request_manual_revision(read_input, write_output)]
+        revision_requests = [
+            _request_manual_revision(
+                read_input,
+                write_output,
+                include_rule=rule_path is not None,
+            )
+        ]
 
     finding_decision = (
         HumanReviewDecision.APPROVE_CURRENT_RDF
@@ -441,7 +469,7 @@ def run_human_review(
         consistency_conforms=evaluation.conforms,
         workflow_rdf_file=str(workflow_path),
         data_rdf_file=str(data_path),
-        rule_rdf_file=str(rule_path),
+        rule_rdf_file=str(rule_path) if rule_path is not None else None,
         consistency_evaluation_file=str(evaluation_path),
         groups=group_results,
         findings=findings,

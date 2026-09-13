@@ -83,23 +83,23 @@ def _write_rdf_artifacts(
     )
 
 
-def _human_review_with_rule_finding(
+def _human_review_with_data_finding(
     decision: HumanReviewDecision,
     comment: str | None = None,
 ) -> HumanReviewReport:
     violation = ShaclViolation(
-        focus_node="urn:rule:payment",
-        path="urn:rule:usesData",
+        focus_node="urn:data:payment",
+        path="urn:data:relatedResource",
         constraint_component="http://www.w3.org/ns/shacl#ClassConstraintComponent",
         message="Referenced data has an incompatible type.",
         rdf_kind=RdfKind.CONSISTENCY,
     )
     analysis = ConsistencyViolationAnalysis(
         violation_index=0,
-        target_resource="urn:rule:payment",
+        target_resource="urn:data:payment",
         cause="The referenced resource does not have the required data type.",
-        target_agent=AgentName.RULE,
-        repair_instruction="Use the documented Data RDF resource.",
+        target_agent=AgentName.DATA,
+        repair_instruction="Use the documented Data RDF relation.",
     )
     finding = HumanReviewFindingResult(
         finding_id="consistency-finding-0000",
@@ -116,7 +116,7 @@ def _human_review_with_rule_finding(
         if approved
         else [
             HumanReviewRevisionRequest(
-                target_agent=AgentName.RULE,
+                target_agent=AgentName.DATA,
                 revision_instruction=(
                     f"{analysis.repair_instruction}\n{comment}"
                     if comment
@@ -150,7 +150,7 @@ def _human_review_with_rule_finding(
         consistency_conforms=False,
         workflow_rdf_file="workflow.ttl",
         data_rdf_file="data.ttl",
-        rule_rdf_file="rule.ttl",
+        rule_rdf_file=None,
         consistency_evaluation_file="consistency.json",
         findings=[finding],
         revision_requests=revision_requests,
@@ -179,7 +179,11 @@ def _approved_human_review(**kwargs) -> HumanReviewReport:
         consistency_conforms=True,
         workflow_rdf_file=str(kwargs["workflow_file"]),
         data_rdf_file=str(kwargs["data_file"]),
-        rule_rdf_file=str(kwargs["rule_file"]),
+        rule_rdf_file=(
+            str(kwargs["rule_file"])
+            if kwargs.get("rule_file") is not None
+            else None
+        ),
         consistency_evaluation_file=str(kwargs["consistency_evaluation_file"]),
         decision_history=[*history, record],
         summary="Human explicitly approved the final RDF.",
@@ -220,15 +224,14 @@ def test_end_to_end_controller_completes_without_human_revision(
         return {"output_dir": str(kwargs["output_dir"]), "final_status": "completed"}
 
     def fake_data_rule(**kwargs):
-        calls.append("data_rule")
+        calls.append("data")
         assert kwargs["scenario_file"] == str(scenario_path)
         assert kwargs["pdf_file"] == pdf_path
         assert kwargs["output_dir"] == tmp_path / "data_rule"
         data_rule_dir = kwargs["output_dir"]
-        for name in ("data", "rule"):
-            _write_rdf_artifacts(data_rule_dir, name)
-        kwargs["progress"].phase(3, 6, "Data RDF", "data")
-        kwargs["progress"].phase(4, 6, "Rule RDF", "rule")
+        assert kwargs["include_rule"] is False
+        _write_rdf_artifacts(data_rule_dir, "data")
+        kwargs["progress"].phase(3, 5, "Data RDF", "data")
         return {"output_dir": str(kwargs["output_dir"]), "final_status": "completed"}
 
     def fake_consistency(**kwargs):
@@ -269,7 +272,7 @@ def test_end_to_end_controller_completes_without_human_revision(
     assert calls == [
         "scenario",
         "workflow",
-        "data_rule",
+        "data",
         "consistency",
         "human_review",
     ]
@@ -297,6 +300,7 @@ def test_end_to_end_controller_completes_without_human_revision(
     assert "human_review" in saved["output_files"]
     assert "final_summary" in saved["output_files"]
     assert "final_workflow_rdf" in saved["output_files"]
+    assert "rule_rdf" not in saved["output_files"]
     final_summary = json.loads(
         (tmp_path / "final" / "final_summary.json").read_text(encoding="utf-8")
     )
@@ -308,13 +312,13 @@ def test_end_to_end_controller_completes_without_human_revision(
             "Scenario RDF",
             "Workflow RDF",
             "Data RDF",
-            "Rule RDF",
             "Cross Consistency",
             "Human Review / Finalization",
         ),
         start=1,
     ):
-        assert f"[Phase {index}/6] {name}" in progress_output
+        assert f"[Phase {index}/5] {name}" in progress_output
+    assert "Rule RDF" not in progress_output
     assert (tmp_path / "controller" / "progress.jsonl").exists()
 
 
@@ -336,8 +340,8 @@ def test_end_to_end_human_revision_returns_to_human_review(
         return {"final_status": "completed"}
 
     def fake_data_rule(**kwargs):
+        assert kwargs["include_rule"] is False
         _write_rdf_artifacts(kwargs["output_dir"], "data")
-        _write_rdf_artifacts(kwargs["output_dir"], "rule")
         return {"final_status": "completed"}
 
     monkeypatch.setattr(controller, "run_scenario_pipeline", fake_scenario)
@@ -361,8 +365,8 @@ def test_end_to_end_human_revision_returns_to_human_review(
         if review_round == 2:
             return _approved_human_review(**kwargs)
         request = HumanReviewRevisionRequest(
-            target_agent=AgentName.RULE,
-            revision_instruction="Correct the documented Rule RDF relation.",
+            target_agent=AgentName.DATA,
+            revision_instruction="Correct the documented Data RDF relation.",
         )
         record = HumanReviewDecisionRecord(
             review_round=1,
@@ -382,7 +386,7 @@ def test_end_to_end_human_revision_returns_to_human_review(
             consistency_conforms=True,
             workflow_rdf_file=str(kwargs["workflow_file"]),
             data_rdf_file=str(kwargs["data_file"]),
-            rule_rdf_file=str(kwargs["rule_file"]),
+            rule_rdf_file=None,
             consistency_evaluation_file=str(kwargs["consistency_evaluation_file"]),
             revision_requests=[request],
             decision_history=[*history, record],
@@ -395,8 +399,8 @@ def test_end_to_end_human_revision_returns_to_human_review(
         revision_calls.append(kwargs["human_review"].revision_requests[0].target_agent.value)
         return {
             "revision_performed": True,
-            "repair_bundles": [{"target_agent": "rule"}],
-            "revision_results": [{"target_agent": "rule", "final_status": "completed"}],
+            "repair_bundles": [{"target_agent": "data"}],
+            "revision_results": [{"target_agent": "data", "final_status": "completed"}],
             "individual_checks_passed": True,
             "consistency_result": {
                 "final_status": "completed",
@@ -414,7 +418,7 @@ def test_end_to_end_human_revision_returns_to_human_review(
     )
 
     assert review_calls == [1, 2]
-    assert revision_calls == ["rule"]
+    assert revision_calls == ["data"]
     assert summary.status is RunStatus.COMPLETED
     assert summary.final_status is FinalizationStatus.COMPLETED_AFTER_HUMAN_REVISION
     assert summary.human_review_input_received is True
@@ -457,7 +461,8 @@ def test_end_to_end_controller_continues_with_quality_issues(
         }
 
     def fake_data_rule(**kwargs):
-        calls.append("data_rule")
+        calls.append("data")
+        assert kwargs["include_rule"] is False
         _write_rdf_artifacts(
             kwargs["output_dir"],
             "data",
@@ -465,7 +470,6 @@ def test_end_to_end_controller_continues_with_quality_issues(
                 "max_iterations" if issue_kind == "data" else "passed"
             ),
         )
-        _write_rdf_artifacts(kwargs["output_dir"], "rule")
         return {
             "final_status": "needs_review" if issue_kind == "data" else "completed"
         }
@@ -489,14 +493,14 @@ def test_end_to_end_controller_continues_with_quality_issues(
         calls.append("human_review")
         assert "individual_rdf_issues" not in kwargs
         if issue_kind == "cross":
-            report = _human_review_with_rule_finding(
+            report = _human_review_with_data_finding(
                 HumanReviewDecision.APPROVE_CURRENT_RDF
             ).model_copy(
                 update={
                     "status": ReviewStatus.APPROVED,
                     "workflow_rdf_file": str(kwargs["workflow_file"]),
                     "data_rdf_file": str(kwargs["data_file"]),
-                    "rule_rdf_file": str(kwargs["rule_file"]),
+                    "rule_rdf_file": None,
                     "consistency_evaluation_file": str(
                         kwargs["consistency_evaluation_file"]
                     ),
@@ -522,7 +526,7 @@ def test_end_to_end_controller_continues_with_quality_issues(
         output_dir=tmp_path,
     )
 
-    assert calls == ["workflow", "data_rule", "consistency", "human_review"]
+    assert calls == ["workflow", "data", "consistency", "human_review"]
     expected_status = (
         RunStatus.COMPLETED_WITH_ISSUES
         if issue_kind == "cross"
@@ -573,13 +577,14 @@ def _run_human_review_revision(
 
     def fake_targeted(**kwargs):
         calls.append("targeted")
-        assert kwargs["target_agent"] is AgentName.RULE
+        assert kwargs["target_agent"] is AgentName.DATA
         bundle = kwargs["repair_bundle"]
         assert bundle["source"] == "human_review"
         assert bundle["items"][0]["human_decision"] == "request_revision"
         if comment:
             assert comment in bundle["items"][0]["revision_instruction"]
-        return {"target_agent": "rule", "final_status": targeted_status}
+        assert kwargs["rule_file"] is None
+        return {"target_agent": "data", "final_status": targeted_status}
 
     def fake_consistency(**kwargs):
         calls.append("consistency")
@@ -595,7 +600,7 @@ def _run_human_review_revision(
     monkeypatch.setattr(controller, "run_targeted_rdf_revision", fake_targeted)
     monkeypatch.setattr(controller, "run_consistency_pipeline", fake_consistency)
     result = controller.run_human_review_revision(
-        human_review=_human_review_with_rule_finding(decision, comment),
+        human_review=_human_review_with_data_finding(decision, comment),
         consistency_result={
             "final_status": "needs_revision",
             "cross_shapes_hash": "fixed-cross-hash",
@@ -970,10 +975,6 @@ def test_consistency_revision_loop_groups_targets_and_reuses_cross_shacl(
         "<urn:data> <urn:p> <urn:o> .",
         encoding="utf-8",
     )
-    (data_rule_dir / "rule_final.ttl").write_text(
-        "<urn:rule> <urn:p> <urn:o> .",
-        encoding="utf-8",
-    )
     cross_calls = 0
     revision_calls = 0
 
@@ -1000,6 +1001,9 @@ def test_consistency_revision_loop_groups_targets_and_reuses_cross_shacl(
     def fake_consistency(**kwargs):
         nonlocal cross_calls
         cross_calls += 1
+        assert kwargs["rule_file"] is None
+        assert kwargs["rule_validation_file"] is None
+        assert kwargs["rule_ontology_file"] is None
         if cross_calls == 1:
             assert "cross_shacl_file" not in kwargs
             return {
@@ -1031,6 +1035,7 @@ def test_consistency_revision_loop_groups_targets_and_reuses_cross_shacl(
         nonlocal revision_calls
         revision_calls += 1
         assert kwargs["target_agent"].value == "data"
+        assert kwargs["rule_file"] is None
         bundle = kwargs["repair_bundle"]
         assert bundle["violation_indices"] == [0, 1]
         assert len(bundle["items"]) == 2
@@ -1062,7 +1067,7 @@ def test_consistency_revision_loop_groups_targets_and_reuses_cross_shacl(
         consistency_dir=consistency_dir,
         workflow_ontology_file=tmp_path / "workflow-ontology.ttl",
         data_ontology_file=tmp_path / "data-ontology.ttl",
-        rule_ontology_file=tmp_path / "rule-ontology.ttl",
+        rule_ontology_file=None,
     )
 
     assert final_result["final_status"] == "completed"

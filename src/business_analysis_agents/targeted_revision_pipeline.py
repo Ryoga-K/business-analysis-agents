@@ -121,29 +121,42 @@ def run_targeted_rdf_revision(
     model: str,
     workflow_file: Path | str,
     data_file: Path | str,
-    rule_file: Path | str,
+    rule_file: Path | str | None,
     workflow_shapes_file: Path | str,
     data_shapes_file: Path | str,
-    rule_shapes_file: Path | str,
+    rule_shapes_file: Path | str | None,
     workflow_ontology_file: Path | str,
     data_ontology_file: Path | str,
-    rule_ontology_file: Path | str,
+    rule_ontology_file: Path | str | None,
     workflow_validation_file: Path | str,
     data_validation_file: Path | str,
-    rule_validation_file: Path | str,
+    rule_validation_file: Path | str | None,
     workflow_revision_history_file: Path | str,
     data_revision_history_file: Path | str,
-    rule_revision_history_file: Path | str,
+    rule_revision_history_file: Path | str | None,
     workflow_self_review_file: Path | str,
     data_self_review_file: Path | str,
-    rule_self_review_file: Path | str,
+    rule_self_review_file: Path | str | None,
     workflow_runner: Callable[..., Any] | None = None,
     data_rule_runner: Callable[..., Any] | None = None,
     progress: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Revise one RDF, then run its fixed individual SHACL and Self-Review."""
 
-    if target_agent not in {AgentName.WORKFLOW, AgentName.DATA, AgentName.RULE}:
+    allowed_agents = {AgentName.WORKFLOW, AgentName.DATA}
+    rule_inputs = (
+        rule_file,
+        rule_shapes_file,
+        rule_ontology_file,
+        rule_validation_file,
+        rule_revision_history_file,
+        rule_self_review_file,
+    )
+    if all(value is not None for value in rule_inputs):
+        allowed_agents.add(AgentName.RULE)
+    elif any(value is not None for value in rule_inputs):
+        raise ValueError("All Rule targeted revision inputs must be supplied together.")
+    if target_agent not in allowed_agents:
         raise ValueError(f"Unsupported targeted revision agent: {target_agent.value}")
 
     scenario_turtle = load_scenario_rdf(scenario_file)
@@ -154,38 +167,39 @@ def run_targeted_rdf_revision(
     rdf_turtles = {
         AgentName.WORKFLOW: _load_text(workflow_file, "Workflow RDF"),
         AgentName.DATA: _load_text(data_file, "Data RDF"),
-        AgentName.RULE: _load_text(rule_file, "Rule RDF"),
     }
     rdf_files = {
         AgentName.WORKFLOW: Path(workflow_file),
         AgentName.DATA: Path(data_file),
-        AgentName.RULE: Path(rule_file),
     }
     shape_files = {
         AgentName.WORKFLOW: Path(workflow_shapes_file),
         AgentName.DATA: Path(data_shapes_file),
-        AgentName.RULE: Path(rule_shapes_file),
     }
     ontology_files = {
         AgentName.WORKFLOW: workflow_ontology_file,
         AgentName.DATA: data_ontology_file,
-        AgentName.RULE: rule_ontology_file,
     }
     validation_files = {
         AgentName.WORKFLOW: Path(workflow_validation_file),
         AgentName.DATA: Path(data_validation_file),
-        AgentName.RULE: Path(rule_validation_file),
     }
     history_files = {
         AgentName.WORKFLOW: Path(workflow_revision_history_file),
         AgentName.DATA: Path(data_revision_history_file),
-        AgentName.RULE: Path(rule_revision_history_file),
     }
     self_review_files = {
         AgentName.WORKFLOW: Path(workflow_self_review_file),
         AgentName.DATA: Path(data_self_review_file),
-        AgentName.RULE: Path(rule_self_review_file),
     }
+    if AgentName.RULE in allowed_agents:
+        rdf_turtles[AgentName.RULE] = _load_text(rule_file, "Rule RDF")
+        rdf_files[AgentName.RULE] = Path(rule_file)
+        shape_files[AgentName.RULE] = Path(rule_shapes_file)
+        ontology_files[AgentName.RULE] = rule_ontology_file
+        validation_files[AgentName.RULE] = Path(rule_validation_file)
+        history_files[AgentName.RULE] = Path(rule_revision_history_file)
+        self_review_files[AgentName.RULE] = Path(rule_self_review_file)
 
     rdf_kind = RdfKind(target_agent.value)
     current_rdf = rdf_turtles[target_agent]

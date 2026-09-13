@@ -99,6 +99,7 @@ def _validation_payload(validation: CrossRdfValidationResult) -> dict[str, Any]:
 def _validate_analyses(
     analyses: list[ConsistencyViolationAnalysis],
     violation_count: int,
+    allowed_agents: set[AgentName],
 ) -> None:
     actual_indices = [analysis.violation_index for analysis in analyses]
     expected_indices = list(range(violation_count))
@@ -107,7 +108,6 @@ def _validate_analyses(
             "Consistency Agent must return exactly one analysis per violation. "
             f"expected={expected_indices}, actual={actual_indices}"
         )
-    allowed_agents = {AgentName.WORKFLOW, AgentName.DATA, AgentName.RULE}
     invalid_agents = sorted(
         {
             analysis.target_agent.value
@@ -123,8 +123,8 @@ def _validate_analyses(
 
 
 def _assert_fixed_hashes(
-    ontology_turtles: tuple[str, str, str],
-    ontology_hashes: tuple[str, str, str],
+    ontology_turtles: tuple[str, ...],
+    ontology_hashes: tuple[str, ...],
     cross_shacl_turtle: str,
     cross_shapes_hash: str,
 ) -> None:
@@ -138,14 +138,14 @@ def run_consistency_pipeline(
     model: str,
     workflow_file: Path | str = DEFAULT_WORKFLOW_RDF,
     data_file: Path | str = DEFAULT_DATA_RDF,
-    rule_file: Path | str = DEFAULT_RULE_RDF,
+    rule_file: Path | str | None = DEFAULT_RULE_RDF,
     workflow_validation_file: Path | str = DEFAULT_WORKFLOW_VALIDATION,
     data_validation_file: Path | str = DEFAULT_DATA_VALIDATION,
-    rule_validation_file: Path | str = DEFAULT_RULE_VALIDATION,
+    rule_validation_file: Path | str | None = DEFAULT_RULE_VALIDATION,
     output_dir: Path | str = "outputs/consistency",
     workflow_ontology_file: Path | str = DEFAULT_WORKFLOW_ONTOLOGY,
     data_ontology_file: Path | str = DEFAULT_DATA_ONTOLOGY,
-    rule_ontology_file: Path | str = DEFAULT_RULE_ONTOLOGY,
+    rule_ontology_file: Path | str | None = DEFAULT_RULE_ONTOLOGY,
     runner: Callable[..., Any] | None = None,
     cross_shacl_file: Path | str | None = None,
     expected_cross_shapes_hash: str | None = None,
@@ -168,33 +168,51 @@ def run_consistency_pipeline(
         workflow_file, "Workflow RDF"
     )
     data_path, data_turtle = _load_required_turtle(data_file, "Data RDF")
-    rule_path, rule_turtle = _load_required_turtle(rule_file, "Rule RDF")
     _require_parseable_rdf(workflow_turtle, "Workflow RDF")
     _require_parseable_rdf(data_turtle, "Data RDF")
-    _require_parseable_rdf(rule_turtle, "Rule RDF")
     workflow_validation_path = _require_validation_result(
         workflow_validation_file, "Workflow"
     )
     data_validation_path = _require_validation_result(data_validation_file, "Data")
-    rule_validation_path = _require_validation_result(rule_validation_file, "Rule")
     workflow_ontology_path, workflow_ontology = load_fixed_turtle(
         workflow_ontology_file, "Workflow ontology"
     )
     data_ontology_path, data_ontology = load_fixed_turtle(
         data_ontology_file, "Data ontology"
     )
-    rule_ontology_path, rule_ontology = load_fixed_turtle(
-        rule_ontology_file, "Rule ontology"
-    )
+    include_rule = rule_file is not None
+    if include_rule and not all(
+        value is not None
+        for value in (rule_validation_file, rule_ontology_file)
+    ):
+        raise ValueError(
+            "Rule RDF, validation result, and ontology must be supplied together."
+        )
+    rule_path: Path | None = None
+    rule_turtle: str | None = None
+    rule_validation_path: Path | None = None
+    rule_ontology_path: Path | None = None
+    rule_ontology: str | None = None
+    if include_rule:
+        rule_path, rule_turtle = _load_required_turtle(rule_file, "Rule RDF")
+        _require_parseable_rdf(rule_turtle, "Rule RDF")
+        rule_validation_path = _require_validation_result(
+            rule_validation_file, "Rule"
+        )
+        rule_ontology_path, rule_ontology = load_fixed_turtle(
+            rule_ontology_file, "Rule ontology"
+        )
 
-    ontology_turtles = (workflow_ontology, data_ontology, rule_ontology)
+    ontology_turtles = (workflow_ontology, data_ontology)
+    if rule_ontology is not None:
+        ontology_turtles = (*ontology_turtles, rule_ontology)
     ontology_hashes = tuple(content_hash(turtle) for turtle in ontology_turtles)
     agent_input = ConsistencyEvaluationInput(
         workflow_rdf_turtle=workflow_turtle,
         data_rdf_turtle=data_turtle,
-        rule_rdf_turtle=rule_turtle,
         workflow_ontology_turtle=workflow_ontology,
         data_ontology_turtle=data_ontology,
+        rule_rdf_turtle=rule_turtle,
         rule_ontology_turtle=rule_ontology,
     )
     if cross_shacl_file is None:
@@ -268,13 +286,13 @@ def run_consistency_pipeline(
         completed_message="Cross validation completed",
     ):
         validation = validate_cross_rdf(
-            workflow_turtle,
-            data_turtle,
-            rule_turtle,
-            workflow_ontology,
-            data_ontology,
-            rule_ontology,
-            cross_shacl_turtle,
+            workflow_turtle=workflow_turtle,
+            data_turtle=data_turtle,
+            rule_turtle=rule_turtle,
+            workflow_ontology_turtle=workflow_ontology,
+            data_ontology_turtle=data_ontology,
+            rule_ontology_turtle=rule_ontology,
+            cross_shacl_turtle=cross_shacl_turtle,
         )
     write_json(validation_path, _validation_payload(validation))
 
@@ -320,7 +338,10 @@ def run_consistency_pipeline(
             )
         analyses = analysis_output.violation_analyses
         analysis_summary = analysis_output.summary
-        _validate_analyses(analyses, len(violations))
+        allowed_agents = {AgentName.WORKFLOW, AgentName.DATA}
+        if include_rule:
+            allowed_agents.add(AgentName.RULE)
+        _validate_analyses(analyses, len(violations), allowed_agents)
         _assert_fixed_hashes(
             ontology_turtles,
             ontology_hashes,
@@ -350,18 +371,15 @@ def run_consistency_pipeline(
     )
     write_json(evaluation_path, evaluation.model_dump(mode="json"))
 
-    return {
+    result = {
         "output_dir": str(consistency_dir),
         "final_status": "completed" if conforms else "needs_revision",
         "workflow_file": str(workflow_path),
         "data_file": str(data_path),
-        "rule_file": str(rule_path),
         "workflow_validation_file": str(workflow_validation_path),
         "data_validation_file": str(data_validation_path),
-        "rule_validation_file": str(rule_validation_path),
         "workflow_ontology_file": str(workflow_ontology_path),
         "data_ontology_file": str(data_ontology_path),
-        "rule_ontology_file": str(rule_ontology_path),
         "shapes_validation": shapes_validation.model_dump(mode="json"),
         "cross_shacl_file": str(shapes_path.resolve()),
         "cross_shacl_source": cross_shacl_source,
@@ -369,3 +387,12 @@ def run_consistency_pipeline(
         "validation": _validation_payload(validation),
         "evaluation": evaluation.model_dump(mode="json"),
     }
+    if include_rule:
+        result.update(
+            {
+                "rule_file": str(rule_path),
+                "rule_validation_file": str(rule_validation_path),
+                "rule_ontology_file": str(rule_ontology_path),
+            }
+        )
+    return result
