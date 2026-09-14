@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 
-MAX_REVISION_ITERATIONS = 1
+MAX_REVISION_ITERATIONS = 2
 
 
 @dataclass(frozen=True)
