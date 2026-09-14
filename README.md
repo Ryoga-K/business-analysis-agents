@@ -453,15 +453,6 @@ python -m pytest
 79 passed
 ```
 
-## 未実装
-
-- Consistency AgentのSelf-Review
-- Human Review Web UI
-- 人間への問い合わせ生成UI
-- DB保存
-- BBO等を利用した本番用Workflow ontologyへの差し替え
-- Scenario Agent、Workflow Agentの大規模な再設計
-
 ## 注意
 
 - `outputs/` は `.gitignore` 対象です。
