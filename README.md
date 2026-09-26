@@ -1,8 +1,13 @@
 # business-analysis-agents
 
+本リポジトリは、大学・企業との共同研究として現在開発中の、AIエージェントによる業務分析支援システムです。
+業務文書から業務知識を抽出し、RDFとして形式化した上で、SHACLによる検証、自己評価・修正、RDF間の整合性評価を行います。
+システム全体の設計・実装は筆者が担当しています。
+
 OpenAI Agents SDKを用いて、業務文書から業務知識を抽出し、Workflow RDF、Data RDF、Rule RDFを生成・検証する研究用プロトタイプです。
 
-現在のE2E実験では、PDFと固定Scenario OntologyからScenario RDFを生成し、Workflow RDF、Data RDFの生成・個別検証・修正、両RDF間のCross Review、対話式Human Review、Human Reviewに基づく最終RDF確定までを1コマンドで実行できます。Rule RDFは定義とWorkflow内の判断条件との境界を整理するため、E2E対象から一時的に除外しています。Rule関連のAgent、Ontology、SHACL、standalone処理は残しています。Web UIとDB保存はまだ実装していません。
+
+現在のE2E実験では、PDFと固定Scenario OntologyからScenario RDFを生成し、Workflow RDF、Data RDFの生成・個別検証・修正、両RDF間のCross Review、対話式Human Review、Human Reviewに基づく最終RDF確定までを1コマンドで実行できます。Rule RDFは定義とWorkflow内の判断条件との境界を整理するため、E2E対象から一時的に除外しています。Rule関連のAgent、Ontology、SHACL、standalone処理は残しています。
 
 ## 実装済み
 
